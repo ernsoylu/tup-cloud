@@ -16,6 +16,7 @@ import {
   Tooltip,
 } from '@mantine/core'
 import {
+  Icon3dCubeSphere,
   IconArrowUp,
   IconCloud,
   IconEye,
@@ -40,7 +41,7 @@ import { Menu } from '@mantine/core'
 import { api } from '../api'
 import { confirmModal } from '../dialogs'
 import { useShortcuts } from '../hooks/useShortcuts'
-import { createOfficeFile, newFolder } from '../ops'
+import { createCadFile, createOfficeFile, newFolder } from '../ops'
 import { formatBytes, formatWhen, parentDir, useStore } from '../store'
 import type { AdminUserRow, BackupConfig, BackupItem } from '../types'
 import Breadcrumbs from './Breadcrumbs'
@@ -202,6 +203,12 @@ export default function Explorer() {
                 onClick={() => void createOfficeFile('drawing')}
               >
                 New drawing (.odg)
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<Icon3dCubeSphere size={15} />}
+                onClick={() => void createCadFile()}
+              >
+                New CAD drawing (.dxf)
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>

@@ -57,6 +57,39 @@ export async function createOfficeFile(
   }
 }
 
+// Minimal R12 DXF (header + empty tables/blocks/entities) — plain text, so it
+// goes through the same save pipeline as markdown and parses in any CAD app.
+const BLANK_DXF = [
+  '0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '0', 'ENDSEC',
+  '0', 'SECTION', '2', 'TABLES', '0', 'ENDSEC',
+  '0', 'SECTION', '2', 'BLOCKS', '0', 'ENDSEC',
+  '0', 'SECTION', '2', 'ENTITIES', '0', 'ENDSEC',
+  '0', 'EOF', '',
+].join('\n')
+
+/** Create a blank .dxf (auto-named like office files) and open it in OpenCADStudio. */
+export async function createCadFile(): Promise<void> {
+  const store = useStore.getState()
+  const chatId = store.currentDrive
+  if (!chatId) return
+  const dir = dirOf(store.currentDir)
+  const taken = new Set(
+    store.entries
+      .filter((e) => e.virtual_path === dir)
+      .map((e) => e.file_name.toLowerCase()),
+  )
+  let name = 'New CAD Drawing.dxf'
+  for (let n = 1; taken.has(name.toLowerCase()) && n < 1000; n++) name = `New CAD Drawing_${n}.dxf`
+  try {
+    const result = await api.saveText(chatId, `${dir}${name}`, BLANK_DXF)
+    await store.refreshIndex(true)
+    const entry = useStore.getState().entries.find((e) => e.id === result.id)
+    if (entry) store.setCadEntry(entry)
+  } catch (error) {
+    store.toast('error', (error as Error).message)
+  }
+}
+
 /** First free "New Markdown File[_n].md" name in the current folder. */
 export function newMarkdownName(): string {
   const store = useStore.getState()
