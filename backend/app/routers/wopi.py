@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.membership import member_chat_ids
 from app.models import User, VfsEntry
 from app.saving import cache_path_for, save_bytes
 from app.security import decode_wopi_token, mint_wopi_token
@@ -61,10 +62,23 @@ async def _authorized_entry(
     async with SessionLocal() as db:
         entry = await db.get(VfsEntry, entry_id)
         user = await db.get(User, int(payload["sub"]))
-    if entry is None:
-        raise HTTPException(status_code=404, detail="File not found")
-    if user is None or not user.approved:
-        raise HTTPException(status_code=401, detail="Account not available")
+        if entry is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        if user is None or not user.approved:
+            raise HTTPException(status_code=401, detail="Account not available")
+        # Re-check drive membership on every WOPI call: the token has a long
+        # TTL and is browser-exposed, so a user removed from the drive must
+        # lose access to its files. member_chat_ids is Redis-cached (~5 min),
+        # so repeat calls during an editing session stay cheap. Admins bypass.
+        if user.role != "admin":
+            member_chats = await member_chat_ids(
+                db,
+                request.app.state.redis,
+                request.app.state.tg,
+                user.telegram_id,
+            )
+            if entry.chat_id not in member_chats:
+                raise HTTPException(status_code=403, detail="No access to this drive")
     return entry, payload
 
 

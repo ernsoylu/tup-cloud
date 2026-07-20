@@ -16,7 +16,7 @@ import {
 import { MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
 import { api, downloadUrl, exportUrl, thumbUrl } from '../api'
 import { confirmModal } from '../dialogs'
-import { FileIcon, isOffice, KindIcon, kindLabel } from '../media'
+import { FileIcon, isCad, isOffice, KindIcon, kindLabel } from '../media'
 import {
   collectDropped,
   copySelection,
@@ -187,7 +187,7 @@ export default function FileList() {
       <Table stickyHeader highlightOnHover verticalSpacing={6}>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>{trashView ? 'Name (original location)' : 'Name'}</Table.Th>
+            <Table.Th>Name</Table.Th>
             <Table.Th w={90} ta="right">
               Size
             </Table.Th>
@@ -406,13 +406,17 @@ function ContextMenu({
       add('Open preview', () => setPreview(entry))
       items.push(<Menu.Divider key="d" />)
       add('Delete forever', () => void deleteSelection())
+    } else if (row && row.kind === 'folder') {
+      add('Open', () => openRow(row))
     } else {
       add('Refresh', () => void useStore.getState().refreshIndex())
     }
   } else if (row) {
     if (row.kind === 'file' && row.entry) {
       const entry = row.entry
-      if (isOffice(entry.file_name)) {
+      if (isCad(entry.file_name)) {
+        add('Open in CAD studio', () => useStore.getState().setCadEntry(entry))
+      } else if (isOffice(entry.file_name)) {
         add('Edit document', () => useStore.getState().setOfficeEntry(entry))
         add('Export as PDF', () => window.open(exportUrl(entry.id, 'pdf'), '_blank'))
       } else {

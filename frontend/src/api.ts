@@ -100,6 +100,8 @@ export const api = {
     request<FileVersionItem[]>(`/api/files/${entryId}/versions`),
   wopiSession: (entryId: number) =>
     request<{ url: string }>(`/api/files/${entryId}/wopi-session`, { method: 'POST' }),
+  cadSession: (entryId: number) =>
+    request<{ url: string }>(`/api/files/${entryId}/cad-session`, { method: 'POST' }),
   newOfficeFile: (chatId: string, path: string, docType: string) =>
     request<{ ok: boolean; id: number; file_name: string }>(
       '/api/files/office',
@@ -161,6 +163,23 @@ export function thumbUrl(entryId: number): string {
 
 export function downloadUrl(entryId: number): string {
   return `/api/files/${entryId}/download`
+}
+
+export async function replaceFile(entryId: number, file: File): Promise<void> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  const response = await fetch(`/api/files/${entryId}/replace`, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  })
+  if (!response.ok) {
+    let detail = `Replace failed (${response.status})`
+    try {
+      detail = (await response.json()).detail ?? detail
+    } catch { /* keep default */ }
+    throw new ApiError(response.status, detail)
+  }
 }
 
 export function exportUrl(entryId: number, format = 'pdf'): string {

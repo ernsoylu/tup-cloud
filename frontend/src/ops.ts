@@ -2,7 +2,7 @@
 
 import { api } from './api'
 import { confirmModal, promptModal } from './dialogs'
-import { isOffice } from './media'
+import { isCad, isOffice } from './media'
 import { buildRows, dirOf, inTrash, KEEP_FILE, Row, TRASH_DIR, useStore } from './store'
 
 export function rowPath(row: Row): string {
@@ -17,6 +17,8 @@ export function isMarkdown(name: string): boolean {
 export function openRow(row: Row): void {
   const store = useStore.getState()
   if (row.kind === 'folder') store.setDir(rowPath(row))
+  else if (row.entry && isCad(row.entry.file_name) && !inTrash(store.currentDir))
+    store.setCadEntry(row.entry)
   else if (row.entry && isOffice(row.entry.file_name) && !inTrash(store.currentDir))
     store.setOfficeEntry(row.entry) // Collabora is both viewer and editor
   else if (row.entry) store.setPreview(row.entry) // preview by default, edit via context menu
@@ -74,9 +76,10 @@ export async function restoreRows(names: string[]): Promise<void> {
   const store = useStore.getState()
   const chatId = store.currentDrive
   if (!chatId) return
+  const dir = dirOf(store.currentDir) // somewhere inside /.Trash/
   for (const name of names) {
     try {
-      await api.trashRestore(chatId, TRASH_DIR + name)
+      await api.trashRestore(chatId, dir + name)
     } catch (error) {
       store.toast('error', `${name}: ${(error as Error).message}`)
     }

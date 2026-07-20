@@ -2,6 +2,7 @@
  * MIME, MIME → media kind, kind → Tabler icon tinted with Mantine colors. */
 
 import {
+  Icon3dCubeSphere,
   IconFile,
   IconFileText,
   IconFileZip,
@@ -11,7 +12,15 @@ import {
   IconPhoto,
 } from '@tabler/icons-react'
 
-export type IconKind = 'folder' | 'photo' | 'video' | 'audio' | 'archive' | 'text' | 'document'
+export type IconKind =
+  | 'folder'
+  | 'photo'
+  | 'video'
+  | 'audio'
+  | 'archive'
+  | 'text'
+  | 'cad'
+  | 'document'
 
 const EXT_MIME: Record<string, string> = {
   mp4: 'video/mp4',
@@ -43,6 +52,22 @@ const EXT_MIME: Record<string, string> = {
   '7z': 'application/x-7z-compressed',
   gz: 'application/gzip',
   tar: 'application/x-tar',
+  dwg: 'image/vnd.dwg',
+  dxf: 'image/vnd.dxf',
+  stl: 'model/stl',
+  step: 'model/step',
+  stp: 'model/step',
+  obj: 'model/obj',
+  iges: 'model/iges',
+  igs: 'model/iges',
+}
+
+const CAD_EXTS = new Set(['dwg', 'dxf', 'step', 'stp', 'stl', 'obj', 'iges', 'igs'])
+
+/** Files opened in the embedded OpenCADStudio. */
+export function isCad(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  return CAD_EXTS.has(ext)
 }
 
 const OFFICE_EXTS = new Set([
@@ -83,12 +108,14 @@ export function kindFromMime(mime: string): IconKind {
 /** Icon kind for a file: trust indexed media kind when it names real media,
  * otherwise infer from the extension so untyped files still look right. */
 export function iconKindFor(fileName: string, mediaKind: string): IconKind {
+  if (isCad(fileName)) return 'cad'
   if (mediaKind === 'photo' || mediaKind === 'video' || mediaKind === 'audio') return mediaKind
   return kindFromMime(mimeFromName(fileName))
 }
 
 const ICON_COMPONENT: Record<IconKind, typeof IconFile> = {
   folder: IconFolder,
+  cad: Icon3dCubeSphere,
   photo: IconPhoto,
   video: IconMovie,
   audio: IconMusic,
@@ -99,6 +126,7 @@ const ICON_COMPONENT: Record<IconKind, typeof IconFile> = {
 
 const ICON_COLOR: Record<IconKind, string> = {
   folder: 'var(--mantine-color-blue-4)',
+  cad: 'var(--mantine-color-indigo-4)',
   photo: 'var(--mantine-color-teal-4)',
   video: 'var(--mantine-color-grape-4)',
   audio: 'var(--mantine-color-orange-4)',
@@ -140,6 +168,7 @@ const EXT_LABEL: Record<string, string> = {
   pdf: 'pdf',
   txt: 'text', json: 'text',
   zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
+  dwg: 'cad', dxf: 'cad', step: 'cad', stp: 'cad', stl: 'cad', obj: 'cad', iges: 'cad', igs: 'cad',
 }
 
 /** Human-friendly type shown in the Kind column: category plus the concrete

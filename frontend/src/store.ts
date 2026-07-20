@@ -33,6 +33,8 @@ interface State {
   editorTarget: { entry: VfsEntry } | { newIn: string } | null
   /** Collabora (CODE) editor target. */
   officeEntry: VfsEntry | null
+  /** OpenCADStudio editor target. */
+  cadEntry: VfsEntry | null
   transfers: Record<string, Transfer>
   observerEvents: ObserverEventItem[]
   showTransfers: boolean
@@ -54,6 +56,7 @@ interface State {
   setPreview: (entry: VfsEntry | null) => void
   setEditorTarget: (target: { entry: VfsEntry } | { newIn: string } | null) => void
   setOfficeEntry: (entry: VfsEntry | null) => void
+  setCadEntry: (entry: VfsEntry | null) => void
   toggleTransfers: () => void
   toggleObserver: () => void
   setClipboard: (clipboard: Clipboard | null) => void
@@ -83,6 +86,7 @@ export const useStore = create<State>((set, get) => ({
   preview: null,
   editorTarget: null,
   officeEntry: null,
+  cadEntry: null,
   transfers: {},
   observerEvents: [],
   showTransfers: true,
@@ -162,6 +166,7 @@ export const useStore = create<State>((set, get) => ({
   setPreview: (preview) => set({ preview }),
   setEditorTarget: (editorTarget) => set({ editorTarget }),
   setOfficeEntry: (officeEntry) => set({ officeEntry }),
+  setCadEntry: (cadEntry) => set({ cadEntry }),
   toggleTransfers: () => set((s) => ({ showTransfers: !s.showTransfers })),
   toggleObserver: () => set((s) => ({ showObserver: !s.showObserver })),
   setClipboard: (clipboard) => set({ clipboard }),
@@ -301,16 +306,35 @@ export function trashCount(entries: VfsEntry[]): number {
     .length
 }
 
-export function childDirs(entries: VfsEntry[], dir: string): string[] {
+function childDirsOf(dirs: string[], dir: string): string[] {
   const prefix = dirOf(dir)
   const children = new Set<string>()
-  for (const d of allDirs(entries)) {
+  for (const d of dirs) {
     if (d !== prefix && d.startsWith(prefix)) {
       const rest = d.slice(prefix.length).split('/').filter(Boolean)
       if (rest.length >= 1) children.add(`${prefix}${rest[0]}/`)
     }
   }
   return [...children].sort()
+}
+
+export function childDirs(entries: VfsEntry[], dir: string): string[] {
+  return childDirsOf(allDirs(entries), dir)
+}
+
+/** Folder paths inside the Recycle Bin, derived from trashed entries. */
+function trashDirs(entries: VfsEntry[]): string[] {
+  const dirs = new Set<string>([TRASH_DIR])
+  for (const e of entries) {
+    if (!e.virtual_path.startsWith(TRASH_DIR)) continue
+    const parts = e.virtual_path.slice(TRASH_DIR.length).split('/').filter(Boolean)
+    let acc = TRASH_DIR
+    for (const part of parts) {
+      acc = `${acc}${part}/`
+      dirs.add(acc)
+    }
+  }
+  return [...dirs].sort()
 }
 
 export function buildRows(
@@ -332,10 +356,27 @@ export function buildRows(
   })
   let rows: Row[]
   if (prefix.startsWith(TRASH_DIR)) {
-    // Recycle Bin view: every trashed file, labeled by its original location.
-    rows = entries
-      .filter((e) => e.virtual_path.startsWith(TRASH_DIR) && e.file_name !== KEEP_FILE)
-      .map((e) => toRow(e, `${e.virtual_path.slice(TRASH_DIR.length)}${e.file_name}`))
+    // Recycle Bin: browse like a normal filesystem rooted at /.Trash/.
+    if (recursive) {
+      rows = entries
+        .filter((e) => e.virtual_path.startsWith(prefix) && e.file_name !== KEEP_FILE)
+        .map((e) => toRow(e, `${e.virtual_path.slice(prefix.length)}${e.file_name}`))
+    } else {
+      const folders: Row[] = childDirsOf(trashDirs(entries), prefix).map((d) => ({
+        kind: 'folder',
+        name: d.slice(prefix.length, -1),
+        entry: null,
+        size: 0,
+        mediaKind: '',
+        modified: '',
+        origin: '',
+        tags: '',
+      }))
+      const files = entries
+        .filter((e) => e.virtual_path === prefix && e.file_name !== KEEP_FILE)
+        .map((e) => toRow(e, e.file_name))
+      rows = [...folders, ...files]
+    }
   } else if (recursive) {
     // ls -R style: every file at or below the current folder, shown by subpath.
     rows = entries

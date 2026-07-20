@@ -44,6 +44,7 @@ import { createOfficeFile, newFolder } from '../ops'
 import { formatBytes, formatWhen, parentDir, useStore } from '../store'
 import type { AdminUserRow, BackupConfig, BackupItem } from '../types'
 import Breadcrumbs from './Breadcrumbs'
+import CadEditor from './CadEditor'
 import FileList from './FileList'
 import MarkdownEditor from './MarkdownEditor'
 import ObserverFeed from './ObserverFeed'
@@ -287,6 +288,7 @@ export default function Explorer() {
       <Preview />
       <MarkdownEditor />
       <OfficeEditor />
+      <CadEditor />
       {showAdmin && <AdminPanel close={() => setShowAdmin(false)} />}
     </AppShell>
   )

@@ -8,7 +8,7 @@ import mimetypes
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -312,6 +312,22 @@ async def wopi_session(
     return {"url": f"{frame_path}{separator}WOPISrc={wopi_src}&access_token={token}"}
 
 
+@router.post("/files/{entry_id}/cad-session")
+async def cad_session(
+    entry_id: int, user: CurrentUser, chats: UserChats, db: DbSession
+) -> dict:
+    """Start an OpenCADStudio editing session. The studio's web build (our
+    patched fork) reads ?wopi=…&access_token=… from its URL, fetches the file
+    via the same WOPI endpoints Collabora uses, and Ctrl+S saves back."""
+    entry = await _load_entry(entry_id, db, chats)
+    token = mint_wopi_token(
+        entry.id, user.id, user.username or user.display_name or str(user.telegram_id)
+    )
+    # Browser-side WOPI: same-origin /wopi/... proxied by nginx to the backend.
+    wopi_src = urllib.parse.quote(f"/wopi/files/{entry.id}", safe="")
+    return {"url": f"/OpenCADStudio/?wopi={wopi_src}&access_token={token}"}
+
+
 class OfficeFileBody(BaseModel):
     chat_id: str
     path: str  # full VFS path including the file name (extension added if missing)
@@ -422,6 +438,44 @@ async def version_content(
     except TupError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return Response(content=data, media_type="text/plain; charset=utf-8")
+
+
+@router.post("/files/{entry_id}/replace")
+async def replace_file(
+    entry_id: int,
+    file: UploadFile,
+    # = None only satisfies param ordering after the required UploadFile;
+    # FastAPI still enforces the Depends() (auth/membership are NOT optional).
+    user: CurrentUser = None,  # type: ignore[assignment]
+    chats: UserChats = None,  # type: ignore[assignment]
+    db: DbSession = None,  # type: ignore[assignment]
+    tg: TgDep = None,  # type: ignore[assignment]
+    hub: HubDep = None,  # type: ignore[assignment]
+) -> dict:
+    """Replace a file's content with an edited copy (same name and folder).
+    Goes through the shared save pipeline, so the old revision becomes a
+    version snapshot. Used by editors without a save-back protocol (CAD)."""
+    entry = await _load_entry(entry_id, db, chats)
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if len(data) > get_settings().office_max_bytes:
+        raise HTTPException(status_code=413, detail="File too large to replace through the editor")
+    try:
+        saved, changed = await save_bytes(
+            db,
+            tg,
+            hub,
+            chat_id=entry.chat_id,
+            virtual_path=entry.virtual_path,
+            file_name=entry.file_name,
+            data=data,
+            mime=effective_mime(entry),
+            saved_by=user.username or str(user.telegram_id),
+        )
+    except TupError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True, "id": saved.id, "unchanged": not changed, "file_size": saved.file_size}
 
 
 class CaptionBody(BaseModel):
