@@ -6,7 +6,10 @@
 # solid3d/lzma deps are excluded; no wasm threads → no COOP/COEP needed).
 FROM rust:1-bookworm AS build
 ARG OCS_REPO=https://github.com/HakanSeven12/OpenCADStudio.git
-ARG OCS_REF=main
+# Pin to a release tag: upstream main moves daily and has shipped with a broken
+# wgpu viewport (blank canvas, no crosshair). Releases are what their hosted
+# demo deploys, so they are the tested line. Bump deliberately.
+ARG OCS_REF=v0.8.4
 
 RUN rustup target add wasm32-unknown-unknown
 
