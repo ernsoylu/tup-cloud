@@ -1,0 +1,38 @@
+/* Custom bits on top of Mantine's dark theme: drag-and-drop affordances and
+   media preview sizing — everything else comes from Mantine defaults. */
+
+.drop-target {
+  outline: 1px dashed var(--mantine-color-blue-5);
+  outline-offset: -1px;
+}
+
+.os-drop {
+  outline: 2px dashed var(--mantine-color-blue-5);
+  outline-offset: -6px;
+}
+
+.drop-overlay {
+  position: sticky;
+  bottom: 16px;
+  margin: 0 16px;
+  padding: 12px;
+  text-align: center;
+  background: var(--mantine-color-blue-light);
+  border: 1px dashed var(--mantine-color-blue-5);
+  border-radius: var(--mantine-radius-md);
+  pointer-events: none;
+}
+
+.preview-media {
+  max-width: 96vw;
+  max-height: calc(100vh - 170px);
+  border-radius: var(--mantine-radius-sm);
+}
+
+.preview-frame {
+  width: min(1100px, 96vw);
+  height: calc(100vh - 170px);
+  border: none;
+  background: #fff;
+  border-radius: var(--mantine-radius-sm);
+}
