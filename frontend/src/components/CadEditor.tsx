@@ -1,23 +1,19 @@
 import { Button, Center, Group, Loader, Text } from '@mantine/core'
-import { IconArrowLeft, IconUpload } from '@tabler/icons-react'
-import { useEffect, useRef, useState } from 'react'
-import { api, replaceFile } from '../api'
+import { IconArrowLeft } from '@tabler/icons-react'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
 import { useStore } from '../store'
 
 /** Full-page OpenCADStudio (self-hosted, WOPI-patched fork) for CAD files.
  *
  * The session URL carries WOPI parameters: the studio fetches the drawing
  * itself on load, and Ctrl+S / Save inside the studio uploads straight back
- * through the shared save pipeline (previous revision kept as a version).
- * The manual "save exported copy" remains for formats the studio exports via
- * browser download (STL, STEP, PDF…). */
+ * through the shared save pipeline (previous revision kept as a version). */
 export default function CadEditor() {
   const entry = useStore((s) => s.cadEntry)
   const setCadEntry = useStore((s) => s.setCadEntry)
   const refreshIndex = useStore((s) => s.refreshIndex)
   const toast = useStore((s) => s.toast)
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [saving, setSaving] = useState(false)
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -71,37 +67,6 @@ export default function CadEditor() {
           <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
             Save in the studio (Ctrl+S) writes back to the drive
           </Text>
-        </Group>
-        <Group gap="xs" wrap="nowrap">
-          <Button
-            variant="default"
-            size="compact-sm"
-            loading={saving}
-            leftSection={<IconUpload size={15} />}
-            onClick={() => fileInput.current?.click()}
-          >
-            Save exported copy back
-          </Button>
-          <input
-            ref={fileInput}
-            type="file"
-            hidden
-            onChange={async (e) => {
-              const file = e.target.files?.[0]
-              e.target.value = ''
-              if (!file) return
-              setSaving(true)
-              try {
-                await replaceFile(entry.id, file)
-                toast('info', `${entry.file_name} updated — previous revision kept as a version.`)
-                await refreshIndex(true)
-              } catch (error) {
-                toast('error', (error as Error).message)
-              } finally {
-                setSaving(false)
-              }
-            }}
-          />
         </Group>
       </Group>
 
