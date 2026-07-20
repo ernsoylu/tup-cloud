@@ -7,3 +7,4 @@ frontend/dist/
 .DS_Store
 *.session
 data/
+frontend/tsconfig.tsbuildinfo

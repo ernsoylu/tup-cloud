@@ -22,6 +22,7 @@ class User(Base):
     approved: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[str] = mapped_column(String(40), default=utc_now_iso)
     last_login: Mapped[str] = mapped_column(String(40), default="")
+    default_chat_id: Mapped[str] = mapped_column(String(32), default="")  # landing drive
 
 
 class ChatAlias(Base):
@@ -109,6 +110,15 @@ class FailedUpload(Base):
     error_message: Mapped[str] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|resolved|abandoned
+
+
+class Setting(Base):
+    """Small key-value store for runtime configuration (e.g. backup settings)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")  # JSON
 
 
 class ObserverEvent(Base):

@@ -44,6 +44,7 @@ interface State {
   logout: () => Promise<void>
   loadDrives: () => Promise<void>
   selectDrive: (chatId: string) => void
+  setDefaultDrive: (chatId: string) => Promise<void>
   refreshIndex: (quiet?: boolean) => Promise<void>
   setDir: (dir: string) => void
   setSelection: (names: Set<string>) => void
@@ -114,8 +115,24 @@ export const useStore = create<State>((set, get) => ({
     set({ drives })
     const current = get().currentDrive
     if (!current || !drives.some((d) => d.chat_id === current)) {
-      if (drives.length > 0) get().selectDrive(drives[0].chat_id)
+      const preferred = get().user?.default_chat_id
+      const landing =
+        (preferred && drives.find((d) => d.chat_id === preferred)) || drives[0]
+      if (landing) get().selectDrive(landing.chat_id)
       else set({ currentDrive: null, entries: [] })
+    }
+  },
+
+  setDefaultDrive: async (chatId) => {
+    const user = get().user
+    if (!user) return
+    const next = user.default_chat_id === chatId ? '' : chatId // toggle off = clear
+    try {
+      await api.setDefaultDrive(next)
+      set({ user: { ...user, default_chat_id: next } })
+      get().toast('info', next ? 'Default drive saved.' : 'Default drive cleared.')
+    } catch (error) {
+      get().toast('error', (error as Error).message)
     }
   },
 

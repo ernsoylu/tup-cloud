@@ -16,7 +16,7 @@ import {
 import { MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
 import { api, downloadUrl, exportUrl, thumbUrl } from '../api'
 import { confirmModal } from '../dialogs'
-import { FileIcon, isOffice, KindIcon } from '../media'
+import { FileIcon, isOffice, KindIcon, kindLabel } from '../media'
 import {
   collectDropped,
   copySelection,
@@ -191,7 +191,7 @@ export default function FileList() {
             <Table.Th w={90} ta="right">
               Size
             </Table.Th>
-            <Table.Th w={90}>Kind</Table.Th>
+            <Table.Th w={150}>Kind</Table.Th>
             <Table.Th w={170}>Tags</Table.Th>
             <Table.Th w={170}>Modified</Table.Th>
             <Table.Th w={100}>Origin</Table.Th>
@@ -218,7 +218,7 @@ export default function FileList() {
               </Table.Td>
               <Table.Td>
                 <Text size="xs" c="dimmed">
-                  {row.kind === 'file' ? row.mediaKind : ''}
+                  {row.kind === 'file' ? kindLabel(row.name, row.mediaKind) : ''}
                 </Text>
               </Table.Td>
               <Table.Td>

@@ -213,11 +213,31 @@ async def save_text_file(
 
 # --- Collabora Online (CODE) --------------------------------------------------
 
+# Impress cannot import plain text, so presentations are seeded from a minimal
+# Flat ODP document (one empty slide) that converts cleanly to pptx.
+_BLANK_FODP = b"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+ xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+ xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+ xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"
+ office:version="1.2" office:mimetype="application/vnd.oasis.opendocument.presentation">
+ <office:body>
+  <office:presentation>
+   <draw:page draw:name="page1"/>
+  </office:presentation>
+ </office:body>
+</office:document>"""
+
 _BLANK_SEEDS = {
     # doc_type → (target extension, seed filename, seed bytes, seed mime)
     "document": ("docx", "blank.txt", b"\n", "text/plain"),
     "spreadsheet": ("xlsx", "blank.csv", b"\n", "text/csv"),
-    "presentation": ("pptx", "blank.txt", b"\n", "text/plain"),
+    "presentation": (
+        "pptx",
+        "blank.fodp",
+        _BLANK_FODP,
+        "application/vnd.oasis.opendocument.presentation-flat-xml",
+    ),
     # Draw can't import an empty SVG; a blank PDF page imports cleanly, so
     # drawings are seeded text → pdf → odg (see create_office_file).
     "drawing": ("odg", "blank.txt", b"\n", "text/plain"),

@@ -5,8 +5,10 @@ import {
   Button,
   Group,
   Modal,
+  NumberInput,
   Select,
   Stack,
+  Switch,
   Table,
   Text,
   TextInput,
@@ -29,16 +31,18 @@ import {
   IconRefresh,
   IconVector,
   IconSettings,
+  IconStar,
+  IconStarFilled,
   IconUpload,
 } from '@tabler/icons-react'
-import { ChangeEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@mantine/core'
 import { api } from '../api'
 import { confirmModal } from '../dialogs'
 import { useShortcuts } from '../hooks/useShortcuts'
 import { createOfficeFile, newFolder } from '../ops'
-import { parentDir, useStore } from '../store'
-import type { AdminUserRow } from '../types'
+import { formatBytes, formatWhen, parentDir, useStore } from '../store'
+import type { AdminUserRow, BackupConfig, BackupItem } from '../types'
 import Breadcrumbs from './Breadcrumbs'
 import FileList from './FileList'
 import MarkdownEditor from './MarkdownEditor'
@@ -53,6 +57,7 @@ export default function Explorer() {
   const drives = useStore((s) => s.drives)
   const currentDrive = useStore((s) => s.currentDrive)
   const selectDrive = useStore((s) => s.selectDrive)
+  const setDefaultDrive = useStore((s) => s.setDefaultDrive)
   const currentDir = useStore((s) => s.currentDir)
   const setDir = useStore((s) => s.setDir)
   const filter = useStore((s) => s.filter)
@@ -116,6 +121,26 @@ export default function Explorer() {
             size="xs"
             allowDeselect={false}
           />
+          <Tooltip
+            label={
+              user?.default_chat_id === currentDrive
+                ? 'Default drive — click to clear'
+                : 'Open this drive on login'
+            }
+          >
+            <ActionIcon
+              variant="subtle"
+              color={user?.default_chat_id === currentDrive ? 'yellow' : 'gray'}
+              disabled={!currentDrive}
+              onClick={() => currentDrive && void setDefaultDrive(currentDrive)}
+            >
+              {user?.default_chat_id === currentDrive ? (
+                <IconStarFilled size={15} />
+              ) : (
+                <IconStar size={15} />
+              )}
+            </ActionIcon>
+          </Tooltip>
           <Tooltip label="Up one folder (Backspace)">
             <ActionIcon
               variant="default"
@@ -367,6 +392,8 @@ function AdminPanel({ close }: { close: () => void }) {
           </Group>
         </div>
 
+        <BackupSection />
+
         <div>
           <Group gap="xs" mb="xs">
             <Text fw={600}>Users</Text>
@@ -424,5 +451,170 @@ function AdminPanel({ close }: { close: () => void }) {
         </div>
       </Stack>
     </Modal>
+  )
+}
+
+function BackupSection() {
+  const drives = useStore((s) => s.drives)
+  const toast = useStore((s) => s.toast)
+  const [config, setConfig] = useState<BackupConfig | null>(null)
+  const [backups, setBackups] = useState<BackupItem[] | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      const [cfg, list] = await Promise.all([api.backupConfig(), api.backupList()])
+      setConfig(cfg)
+      setBackups(list)
+    } catch (error) {
+      toast('error', (error as Error).message)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!config) return null
+
+  return (
+    <div>
+      <Text fw={600} mb="xs">
+        Database backups
+      </Text>
+      <Text size="xs" c="dimmed" mb="xs">
+        Backups are ordinary files under /Backups/ in the chosen drive — stored on Telegram,
+        restorable even after a full database loss.
+        {config.last_backup_at ? ` Last backup: ${formatWhen(config.last_backup_at)}.` : ''}
+      </Text>
+      <Group gap="xs" align="flex-end" mb="sm" wrap="wrap">
+        <Select
+          label="Backup drive"
+          size="xs"
+          w={200}
+          data={drives.map((d) => ({ value: d.chat_id, label: `${d.alias} — ${d.title}` }))}
+          value={config.chat_id}
+          onChange={(v) => setConfig({ ...config, chat_id: v })}
+          placeholder="Pick a drive"
+        />
+        <NumberInput
+          label="Every (hours)"
+          size="xs"
+          w={110}
+          min={1}
+          max={720}
+          value={config.period_hours}
+          onChange={(v) => setConfig({ ...config, period_hours: Number(v) || 24 })}
+        />
+        <NumberInput
+          label="Keep last"
+          size="xs"
+          w={100}
+          min={1}
+          max={100}
+          value={config.keep_last}
+          onChange={(v) => setConfig({ ...config, keep_last: Number(v) || 10 })}
+        />
+        <Switch
+          label="Scheduled backups"
+          size="sm"
+          checked={config.enabled}
+          onChange={(e) => setConfig({ ...config, enabled: e.currentTarget.checked })}
+        />
+        <Button
+          size="xs"
+          variant="default"
+          onClick={async () => {
+            try {
+              const saved = await api.setBackupConfig({
+                enabled: config.enabled,
+                chat_id: config.chat_id,
+                period_hours: config.period_hours,
+                keep_last: config.keep_last,
+              })
+              setConfig(saved)
+              toast('info', 'Backup settings saved.')
+            } catch (error) {
+              toast('error', (error as Error).message)
+            }
+          }}
+        >
+          Save settings
+        </Button>
+        <Button
+          size="xs"
+          loading={busy}
+          disabled={!config.chat_id}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              const result = await api.backupRun()
+              toast('info', `Backed up: ${result.file_name} (${formatBytes(result.file_size)})`)
+              await load()
+            } catch (error) {
+              toast('error', (error as Error).message)
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Back up now
+        </Button>
+      </Group>
+      {backups && backups.length > 0 && (
+        <Table verticalSpacing={4}>
+          <Table.Tbody>
+            {backups.map((b) => (
+              <Table.Tr key={b.id}>
+                <Table.Td>
+                  <Text size="sm" ff="monospace">
+                    {b.file_name}
+                  </Text>
+                </Table.Td>
+                <Table.Td w={90} ta="right">
+                  <Text size="xs" c="dimmed" ff="monospace">
+                    {formatBytes(b.file_size)}
+                  </Text>
+                </Table.Td>
+                <Table.Td w={150}>
+                  <Text size="xs" c="dimmed">
+                    {formatWhen(b.created_at)}
+                  </Text>
+                </Table.Td>
+                <Table.Td w={90} ta="right">
+                  <Button
+                    variant="subtle"
+                    color="red"
+                    size="compact-xs"
+                    onClick={async () => {
+                      const confirmed = await confirmModal({
+                        title: 'Restore backup',
+                        message: `Replace the ENTIRE database (drives, files index, users, versions) with the contents of ${b.file_name}? Files on Telegram are untouched, but index changes made after this backup will be lost.`,
+                        confirmLabel: 'Restore',
+                        danger: true,
+                      })
+                      if (!confirmed) return
+                      try {
+                        const result = await api.backupRestore(b.id)
+                        toast(
+                          'info',
+                          `Restored backup from ${formatWhen(result.created_at)} — reloading.`,
+                        )
+                        window.setTimeout(() => window.location.reload(), 1500)
+                      } catch (error) {
+                        toast('error', (error as Error).message)
+                      }
+                    }}
+                  >
+                    Restore
+                  </Button>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      )}
+    </div>
   )
 }

@@ -1,4 +1,6 @@
 import type {
+  BackupConfig,
+  BackupItem,
   Drive,
   FileVersionItem,
   ObserverEventItem,
@@ -53,6 +55,11 @@ export const api = {
     request<UserInfo>('/api/auth/verify', json({ challenge, code })),
   me: () => request<UserInfo>('/api/auth/me'),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  setDefaultDrive: (chatId: string) =>
+    request<{ ok: boolean; default_chat_id: string }>(
+      '/api/auth/default-drive',
+      json({ chat_id: chatId }),
+    ),
   listUsers: () => request<import('./types').AdminUserRow[]>('/api/auth/users'),
   toggleBlock: (id: number) =>
     request<{ id: number; approved: boolean }>(`/api/auth/users/${id}/toggle-block`, {
@@ -110,6 +117,24 @@ export const api = {
     ),
   cacheStats: () =>
     request<{ files: number; bytes: number; ttl_minutes: number }>('/api/cache/stats'),
+
+  backupConfig: () => request<BackupConfig>('/api/backup/config'),
+  setBackupConfig: (config: Omit<BackupConfig, 'last_backup_at'>) =>
+    request<BackupConfig>('/api/backup/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }),
+  backupRun: () =>
+    request<{ id: number; file_name: string; file_size: number }>('/api/backup/run', {
+      method: 'POST',
+    }),
+  backupList: () => request<BackupItem[]>('/api/backup/list'),
+  backupRestore: (entryId: number) =>
+    request<{ restored: Record<string, number>; created_at: string }>(
+      '/api/backup/restore',
+      json({ entry_id: entryId }),
+    ),
 }
 
 export async function fetchText(entryId: number): Promise<string> {

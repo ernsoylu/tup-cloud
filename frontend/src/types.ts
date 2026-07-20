@@ -5,6 +5,7 @@ export interface UserInfo {
   display_name: string
   role: 'admin' | 'user'
   chats: string[]
+  default_chat_id: string
 }
 
 export interface Drive {
@@ -67,6 +68,21 @@ export interface FileVersionItem {
 
 export interface TrashItem extends VfsEntry {
   original_path: string
+}
+
+export interface BackupConfig {
+  enabled: boolean
+  chat_id: string | null
+  period_hours: number
+  keep_last: number
+  last_backup_at: string
+}
+
+export interface BackupItem {
+  id: number
+  file_name: string
+  file_size: number
+  created_at: string
 }
 
 export interface AdminUserRow {

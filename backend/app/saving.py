@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.events import EventHub
 from app.models import FileVersion, UploadLog, VfsEntry
 from app.telegram import TelegramService, format_caption
+from app.vfsutil import utc_now_iso
 
 VERSION_CAP = 20
 
@@ -55,7 +56,8 @@ async def save_bytes(
 
     settings = get_settings()
     settings.spool_dir.mkdir(parents=True, exist_ok=True)
-    spool = settings.spool_dir / f"{uuid.uuid4().hex}__{file_name}"
+    # file_name is display data; never let path separators shape the spool path.
+    spool = settings.spool_dir / f"{uuid.uuid4().hex}__{file_name.replace('/', '_')}"
     spool.write_bytes(data)
     caption = format_caption(
         full_path, file_hash, (existing.user_caption if existing else "") or None
@@ -84,6 +86,7 @@ async def save_bytes(
         existing.mime_type = mime
         existing.media_kind = "document"
         existing.origin = "upload"
+        existing.upload_timestamp = utc_now_iso()  # WOPI LastModifiedTime must advance
         entry = existing
     else:
         entry = VfsEntry(

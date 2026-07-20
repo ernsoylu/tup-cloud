@@ -130,3 +130,34 @@ export function FileIcon({
 }) {
   return <KindIcon kind={iconKindFor(name, mediaKind)} size={size} />
 }
+
+const EXT_LABEL: Record<string, string> = {
+  docx: 'document', doc: 'document', odt: 'document', rtf: 'document',
+  xlsx: 'spreadsheet', xls: 'spreadsheet', ods: 'spreadsheet', csv: 'spreadsheet',
+  pptx: 'presentation', ppt: 'presentation', odp: 'presentation',
+  odg: 'drawing', vsd: 'drawing', vsdx: 'drawing',
+  md: 'markdown', markdown: 'markdown',
+  pdf: 'pdf',
+  txt: 'text', json: 'text',
+  zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
+}
+
+/** Human-friendly type shown in the Kind column: category plus the concrete
+ * format, e.g. "document (docx)" vs "document (odt)" — not Telegram's routing
+ * kind, where every non-media file is just a "document". */
+export function kindLabel(fileName: string, mediaKind: string): string {
+  const ext = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : ''
+  let base: string
+  if (mediaKind === 'photo' || mediaKind === 'video' || mediaKind === 'audio') {
+    base = mediaKind
+  } else if (ext in EXT_LABEL) {
+    base = EXT_LABEL[ext]
+  } else {
+    const mime = mimeFromName(fileName)
+    if (mime.startsWith('text/')) base = 'text'
+    else if (mime.startsWith('image/')) base = 'photo'
+    else base = 'file'
+  }
+  if (ext && ext !== base && ext.length <= 8) return `${base} (${ext})`
+  return base
+}

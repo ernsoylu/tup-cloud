@@ -23,6 +23,7 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 _MIGRATIONS = (
     "ALTER TABLE vfs_index ADD COLUMN IF NOT EXISTS user_caption TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE vfs_index ADD COLUMN IF NOT EXISTS tags TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS default_chat_id VARCHAR(32) NOT NULL DEFAULT ''",
 )
 
 

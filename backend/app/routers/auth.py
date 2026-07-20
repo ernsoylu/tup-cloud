@@ -57,6 +57,7 @@ def _user_payload(user: User, chats: list[str]) -> dict:
         "display_name": user.display_name,
         "role": user.role,
         "chats": chats,
+        "default_chat_id": user.default_chat_id,
     }
 
 
@@ -214,6 +215,23 @@ async def logout(request: Request, response: Response, redis: RedisDep) -> dict:
 @router.get("/me")
 async def me(user: CurrentUser, chats: UserChats) -> dict:
     return _user_payload(user, chats)
+
+
+class DefaultDriveBody(BaseModel):
+    chat_id: str = Field(max_length=32)  # empty string clears the default
+
+
+@router.post("/default-drive")
+async def set_default_drive(
+    body: DefaultDriveBody, user: CurrentUser, chats: UserChats, db: DbSession
+) -> dict:
+    """Per-user landing drive, shown first on login."""
+    if body.chat_id and body.chat_id not in chats:
+        raise HTTPException(status_code=403, detail="No access to that drive")
+    db_user = await db.get(User, user.id)
+    db_user.default_chat_id = body.chat_id
+    await db.commit()
+    return {"ok": True, "default_chat_id": body.chat_id}
 
 
 # --- admin user management ----------------------------------------------------

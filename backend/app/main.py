@@ -12,13 +12,23 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app import observer
+from app.backup import backup_loop
 from app.cleaner import run_cleaner
 from app.config import get_settings
 from app.db import SessionLocal, engine, init_db
 from app.events import EventHub, forward_events
 from app.membership import member_chat_ids
 from app.models import ChatAlias, User
-from app.routers import auth, drives, files, observer as observer_router, uploads, vfs, wopi
+from app.routers import (
+    auth,
+    backup as backup_router,
+    drives,
+    files,
+    observer as observer_router,
+    uploads,
+    vfs,
+    wopi,
+)
 from app.security import ACCESS_COOKIE, decode_access_token
 from app.telegram import TelegramService, TupError
 from app.transfers import TransferManager
@@ -66,12 +76,14 @@ async def lifespan(app: FastAPI):
         logger.info("Observer enabled")
 
     cleaner_task = asyncio.create_task(run_cleaner(hub))
+    backup_task = asyncio.create_task(backup_loop(tg, hub))
     try:
         yield
     finally:
-        cleaner_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cleaner_task
+        for task in (cleaner_task, backup_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await tg.stop()
         await redis.aclose()
         await engine.dispose()
@@ -128,6 +140,7 @@ app.include_router(uploads.router)
 app.include_router(files.router)
 app.include_router(observer_router.router)
 app.include_router(wopi.router)
+app.include_router(backup_router.router)
 
 
 @app.get("/api/health")
