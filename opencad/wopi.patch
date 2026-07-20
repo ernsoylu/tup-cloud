@@ -1,0 +1,273 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 9a47cd7..4b46e90 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -129,6 +129,9 @@ web-sys = { version = "0.3", features = [
+     "Blob",
+     "Url",
+     "Response",
++    "Location",
++    "Request",
++    "RequestInit",
+     # Async clipboard read for paste into the text/MText editors (iced's own
+     # clipboard read is a no-op on the web).
+     "Clipboard",
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 37c105d..16be0ef 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -1217,6 +1217,9 @@ pub enum DsField {
+ #[derive(Debug, Clone)]
+ pub enum Message {
+     Tick(Instant),
++    /// Web: a WOPI save-back (Ctrl+S in an embedded session) finished.
++    /// Native: never emitted.
++    WopiSaved(Result<(), String>),
+     /// Web: periodic check for per-script fonts a drawing needs but hasn't
+     /// fetched yet (#141). Native: never emitted.
+     PollWebFonts,
+@@ -2604,13 +2607,26 @@ impl OpenCADStudio {
+         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+         let mut s = Self::new();
+         let focus = s.focus_cmd_input();
++        // Embedded by a WOPI-style host (?wopi=…&access_token=…): fetch and
++        // open the hosted drawing automatically; Save then uploads back.
++        let wopi_open: Task<Message> = if crate::io::wopi::session_params().is_some() {
++            s.opening = Some(OpenProgress {
++                name: "Opening…".into(),
++                size_bytes: 0,
++                phase: Arc::new(AtomicU8::new(OPEN_PHASE_READING)),
++                started: Instant::now(),
++            });
++            Task::perform(crate::io::wopi::load_wopi_web(), Message::FileOpened)
++        } else {
++            Task::none()
++        };
+         // Web can't reach the Patreon API directly (CORS); fetch the CI-built
+         // supporters.json served on the same origin instead.
+         let patrons = Task::perform(
+             crate::patreon::fetch_patrons_web(),
+             Message::PatronsFetched,
+         );
+-        (s, Task::batch([focus, patrons]))
++        (s, Task::batch([focus, patrons, wopi_open]))
+     }
+ }
+ 
+diff --git a/src/app/update/file.rs b/src/app/update/file.rs
+index 33cac86..a97166e 100644
+--- a/src/app/update/file.rs
++++ b/src/app/update/file.rs
+@@ -748,6 +748,36 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
+                 // Persist Ortho ($ORTHOMODE) + running OSNAP ($OSMODE) into the
+                 // drawing header so they survive save/reopen (per-drawing).
+                 self.stamp_header_sysvars(i);
++                // Web, embedded by a WOPI-style host: plain Save uploads back
++                // to the host (the cloud drive) instead of downloading. Save As
++                // keeps the browser-download behaviour.
++                #[cfg(target_arch = "wasm32")]
++                if crate::io::wopi::active() {
++                    let name = crate::io::wopi::file_name()
++                        .unwrap_or_else(|| "drawing.dwg".into());
++                    let format = if name.to_ascii_lowercase().ends_with(".dxf") {
++                        "DXF 2018"
++                    } else {
++                        "DWG 2018"
++                    };
++                    let (ext, version) = crate::io::parse_save_format(format);
++                    sync_annotation_scale_header(&mut self.tabs[i].scene);
++                    self.sync_truck_solids_to_acis(i);
++                    self.stamp_thumbnail(i);
++                    match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
++                        Ok(bytes) => {
++                            self.command_line.push_output(&format!("Saving {name}…"));
++                            return Task::perform(
++                                crate::io::wopi::put_wopi_file(bytes),
++                                Message::WopiSaved,
++                            );
++                        }
++                        Err(e) => {
++                            self.command_line.push_error(&format!("Save failed: {e}"));
++                            return Task::none();
++                        }
++                    }
++                }
+                 // Native: save straight to the known path. Web has no path
+                 // (downloads instead), so always go through the Save dialog.
+                 #[cfg(not(target_arch = "wasm32"))]
+diff --git a/src/app/update/mod.rs b/src/app/update/mod.rs
+index 5749440..ae793ba 100644
+--- a/src/app/update/mod.rs
++++ b/src/app/update/mod.rs
+@@ -361,6 +361,20 @@ impl OpenCADStudio {
+                 self.drain_pending_open()
+             }
+ 
++            Message::WopiSaved(result) => {
++                match result {
++                    Ok(()) => {
++                        self.command_line.push_output("Saved to cloud drive");
++                        let i = self.active_tab;
++                        self.tabs[i].dirty = false;
++                    }
++                    Err(e) => self
++                        .command_line
++                        .push_error(&format!("Save to cloud failed: {e}")),
++                }
++                Task::none()
++            }
++
+             Message::FileOpened(Ok((name, path, doc, caches))) => {
+                 self.on_file_opened(name, path, doc, caches)
+             }
+diff --git a/src/io/mod.rs b/src/io/mod.rs
+index 9db9379..76047bd 100644
+--- a/src/io/mod.rs
++++ b/src/io/mod.rs
+@@ -5,6 +5,8 @@
+ 
+ pub mod file_association;
+ pub mod obj;
++#[cfg(target_arch = "wasm32")]
++pub mod wopi;
+ #[cfg(not(target_arch = "wasm32"))]
+ pub mod single_instance;
+ pub mod pdf_export;
+diff --git a/src/io/wopi.rs b/src/io/wopi.rs
+new file mode 100644
+index 0000000..4027b96
+--- /dev/null
++++ b/src/io/wopi.rs
+@@ -0,0 +1,132 @@
++//! WOPI-style host integration for the web build.
++//!
++//! When the app is embedded by a cloud host (e.g. tup-cloud), the iframe URL
++//! carries `?wopi=<file endpoint>&access_token=<token>`. The endpoint speaks a
++//! WOPI-like protocol, the same shape Collabora Online uses:
++//!
++//! - `GET  {wopi}?access_token=…`           → file info JSON (`BaseFileName`)
++//! - `GET  {wopi}/contents?access_token=…`  → file bytes
++//! - `POST {wopi}/contents?access_token=…`  → save file bytes back
++//!
++//! With a session present the drawing is fetched and opened automatically at
++//! boot, and plain Save (QSAVE / Ctrl+S) uploads back to the host instead of
++//! triggering a browser download. Save As keeps the download behaviour.
++
++use std::cell::RefCell;
++use std::path::PathBuf;
++
++use wasm_bindgen::JsCast;
++use wasm_bindgen_futures::JsFuture;
++
++use acadrust::CadDocument;
++
++use crate::scene::DerivedCaches;
++
++thread_local! {
++    /// The host file name from CheckFileInfo, once fetched. Doubles as the
++    /// "session is live" flag for the save path.
++    static WOPI_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
++}
++
++/// `(wopi_src, access_token)` from the page URL, if the host embedded us.
++pub fn session_params() -> Option<(String, String)> {
++    let search = web_sys::window()?.location().search().ok()?;
++    let query = search.strip_prefix('?').unwrap_or(&search);
++    let mut src = None;
++    let mut token = None;
++    for pair in query.split('&') {
++        let (key, value) = pair.split_once('=')?;
++        let decoded = js_sys::decode_uri_component(value).ok()?.as_string()?;
++        match key {
++            "wopi" => src = Some(decoded),
++            "access_token" => token = Some(decoded),
++            _ => {}
++        }
++    }
++    Some((src?, token?))
++}
++
++/// True once a WOPI file has been opened — Save then uploads to the host.
++pub fn active() -> bool {
++    WOPI_NAME.with(|n| n.borrow().is_some())
++}
++
++/// The host-side file name (e.g. `part.dwg`) of the active session.
++pub fn file_name() -> Option<String> {
++    WOPI_NAME.with(|n| n.borrow().clone())
++}
++
++async fn fetch_response(url: &str) -> Result<web_sys::Response, String> {
++    let window = web_sys::window().ok_or("no window")?;
++    let resp_val = JsFuture::from(window.fetch_with_str(url))
++        .await
++        .map_err(|_| "fetch failed".to_string())?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response")?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    Ok(resp)
++}
++
++/// Fetch file info + bytes, parse the drawing and build the caches — the same
++/// payload as `pick_and_load_web`, so it feeds `Message::FileOpened` directly.
++pub async fn load_wopi_web(
++) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
++    let (src, token) = session_params().ok_or("no WOPI session in URL")?;
++
++    // CheckFileInfo → the real file name (drives the parser's format choice).
++    let info = fetch_response(&format!("{src}?access_token={token}")).await?;
++    let text = JsFuture::from(info.text().map_err(|_| "text() unavailable")?)
++        .await
++        .map_err(|_| "file info read failed")?;
++    let body = text.as_string().ok_or("file info is not a string")?;
++    let json: serde_json::Value =
++        serde_json::from_str(&body).map_err(|e| e.to_string())?;
++    let name = json["BaseFileName"]
++        .as_str()
++        .unwrap_or("drawing.dwg")
++        .to_string();
++
++    // GetFile → the drawing bytes.
++    let resp = fetch_response(&format!("{src}/contents?access_token={token}")).await?;
++    let buf = JsFuture::from(
++        resp.array_buffer().map_err(|_| "array_buffer unavailable")?,
++    )
++    .await
++    .map_err(|_| "body read failed")?;
++    let bytes = js_sys::Uint8Array::new(&buf).to_vec();
++
++    let mut doc = super::load_bytes(&name, bytes)?;
++    let dropped = super::purge_corrupt_entities(&mut doc);
++    let mut caches = crate::scene::build_derived_caches(&doc);
++    caches.corrupt_dropped = dropped;
++
++    WOPI_NAME.with(|n| *n.borrow_mut() = Some(name.clone()));
++    let path = PathBuf::from(&name);
++    Ok((name, path, doc, caches))
++}
++
++/// PutFile: upload the serialized drawing back to the host.
++pub async fn put_wopi_file(bytes: Vec<u8>) -> Result<(), String> {
++    let (src, token) = session_params().ok_or("no WOPI session in URL")?;
++    let window = web_sys::window().ok_or("no window")?;
++
++    let array = js_sys::Uint8Array::from(bytes.as_slice());
++    let init = web_sys::RequestInit::new();
++    init.set_method("POST");
++    init.set_body(&array.into());
++    let request = web_sys::Request::new_with_str_and_init(
++        &format!("{src}/contents?access_token={token}"),
++        &init,
++    )
++    .map_err(|_| "bad request".to_string())?;
++
++    let resp_val = JsFuture::from(window.fetch_with_request(&request))
++        .await
++        .map_err(|_| "save upload failed".to_string())?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response")?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    Ok(())
++}
