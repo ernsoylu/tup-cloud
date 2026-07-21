@@ -64,6 +64,16 @@ const EXT_MIME: Record<string, string> = {
 
 const CAD_EXTS = new Set(['dwg', 'dxf', 'step', 'stp', 'stl', 'obj', 'iges', 'igs'])
 
+/** Files opened in the embedded Signex EDA. Only the single-file formats the
+ * web build can WOPI-open: schematics round-trip, PCBs open read-only.
+ * Projects / symbols / footprints (.snxprj/.snxsym/.snxfpt) stay downloads. */
+const EDA_EXTS = new Set(['snxsch', 'snxpcb'])
+
+export function isEda(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  return EDA_EXTS.has(ext)
+}
+
 /** Files opened in the embedded OpenCADStudio. */
 export function isCad(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -108,7 +118,7 @@ export function kindFromMime(mime: string): IconKind {
 /** Icon kind for a file: trust indexed media kind when it names real media,
  * otherwise infer from the extension so untyped files still look right. */
 export function iconKindFor(fileName: string, mediaKind: string): IconKind {
-  if (isCad(fileName)) return 'cad'
+  if (isCad(fileName) || isEda(fileName)) return 'cad'
   if (mediaKind === 'photo' || mediaKind === 'video' || mediaKind === 'audio') return mediaKind
   return kindFromMime(mimeFromName(fileName))
 }
@@ -169,6 +179,7 @@ const EXT_LABEL: Record<string, string> = {
   txt: 'text', json: 'text',
   zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
   dwg: 'cad', dxf: 'cad', step: 'cad', stp: 'cad', stl: 'cad', obj: 'cad', iges: 'cad', igs: 'cad',
+  snxsch: 'eda', snxpcb: 'eda', snxprj: 'eda', snxsym: 'eda', snxfpt: 'eda', snxlib: 'eda',
 }
 
 /** Human-friendly type shown in the Kind column: category plus the concrete

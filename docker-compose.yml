@@ -72,6 +72,15 @@ services:
     pull_policy: never
     restart: unless-stopped
 
+  signex:
+    # Prebuilt image, same model as opencad: the wasm build (iced + wgpu +
+    # 17-crate EDA workspace) is compiled on a beefier host via
+    # ./signex/Dockerfile and loaded here as `signex-wopi`. To rebuild:
+    # `docker build -t signex-wopi ./signex` on a machine with adequate RAM.
+    image: signex-wopi
+    pull_policy: never
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     ports:
@@ -80,6 +89,7 @@ services:
       - backend
       - collabora
       - opencad
+      - signex
 
 volumes:
   pgdata:

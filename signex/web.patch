@@ -1,0 +1,908 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index fac212b..6f01e20 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5212,9 +5212,12 @@ dependencies = [
+  "chrono",
+  "dirs",
+  "fontdb",
++ "getrandom 0.2.17",
++ "getrandom 0.3.4",
+  "iced",
+  "iced_aw",
+  "image",
++ "js-sys",
+  "log",
+  "num-traits",
+  "rfd",
+@@ -5239,6 +5242,9 @@ dependencies = [
+  "toml 0.8.23",
+  "tracing",
+  "uuid",
++ "wasm-bindgen",
++ "wasm-bindgen-futures",
++ "web-sys",
+  "webbrowser",
+  "windows-sys 0.61.2",
+  "winres",
+diff --git a/Cargo.toml b/Cargo.toml
+index f68b43d..453f5d6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -54,7 +54,9 @@ repository = "https://github.com/alplabai/signex"
+ 
+ [workspace.dependencies]
+ # UI framework
+-iced = { version = "0.14", features = ["wgpu", "canvas", "advanced", "svg", "image", "tokio"] }
++# The "tokio" executor feature is native-only (tokio's runtime does not build
++# for wasm32); signex-app re-adds it behind a cfg(not(wasm32)) target section.
++iced = { version = "0.14", features = ["wgpu", "canvas", "advanced", "svg", "image"] }
+ iced_aw = { version = "0.13", default-features = false, features = [
+     "tabs", "tab_bar", "card", "context_menu", "number_input",
+     "color_picker", "menu", "drop_down", "selection_list",
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..d080aaf
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,10 @@
++# Web build — `trunk build --release` produces dist/ (see also
++# RUSTFLAGS: the getrandom 0.3 wasm backend must be selected via cfg).
++[build]
++target = "index.html"
++
++[tools]
++# trunk's default binaryen rejects the bulk-memory ops rustc 1.97 emits even
++# with the --all-features param the index.html link passes; pin a current
++# release that understands them.
++wasm_opt = "version_124"
+diff --git a/crates/signex-app/Cargo.toml b/crates/signex-app/Cargo.toml
+index 7e9a49c..3eb6509 100644
+--- a/crates/signex-app/Cargo.toml
++++ b/crates/signex-app/Cargo.toml
+@@ -31,13 +31,9 @@ signex-erc = { workspace = true }
+ signex-erc-dsl = { workspace = true }
+ signex-net = { workspace = true }
+ signex-output = { workspace = true }
+-signex-library = { workspace = true, features = [
+-    "local-git",
+-    "database",
+-    "distributors-community",
+-    "ai-stub",
+-    "search-tantivy",
+-] }
++# Core only here: the adapter features (git2, tantivy, keyring, blocking
++# reqwest) do not build for wasm32 — the native target section re-adds them.
++signex-library = { workspace = true }
+ signex-sketch = { workspace = true }
+ signex-bake = { workspace = true }
+ # `log` feature: signex-app installs a `log`-based logger (SignexLogger) but
+@@ -61,12 +57,45 @@ image = { version = "0.25", default-features = false, features = ["png"] }
+ # the order-of-preference list. `tokio` is already a transitive dep
+ # (iced) but we use the multi-thread runtime explicitly for the OAuth
+ # exchange + Mouser test flow on a worker thread.
++toml = { workspace = true }
++
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++iced = { workspace = true, features = ["tokio"] }
++signex-library = { workspace = true, features = [
++    "local-git",
++    "database",
++    "distributors-community",
++    "ai-stub",
++    "search-tantivy",
++] }
+ webbrowser = "1"
+ tiny_http = "0.12"
+ dirs = "5"
+-toml = { workspace = true }
+ tokio = { workspace = true }
+ 
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++# WebGL2 fallback: without it wgpu-on-wasm is WebGPU-only and the app cannot
++# start on browsers that lack (or blocklist) WebGPU. With both compiled in,
++# wgpu picks WebGPU when navigator.gpu exists and falls back to GL otherwise.
++iced = { workspace = true, features = ["webgl"] }
++console_error_panic_hook = "0.1"
++console_log = "1"
++signex-library = { workspace = true, features = ["ai-stub"] }
++uuid = { workspace = true, features = ["js"] }
++wasm-bindgen = "0.2"
++wasm-bindgen-futures = "0.4"
++js-sys = "0.3"
++web-sys = { version = "0.3", features = [
++    "Window",
++    "Location",
++    "Request",
++    "RequestInit",
++    "Response",
++] }
++# Transitive RNG backends need their JS shims switched on for the browser.
++getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
++getrandom = { version = "0.3", features = ["wasm_js"] }
++
+ [dev-dependencies]
+ tempfile = "3"
+ wiremock = "0.6"
+diff --git a/crates/signex-app/src/app/dispatch/library/components_panel.rs b/crates/signex-app/src/app/dispatch/library/components_panel.rs
+index 681ff01..f255149 100644
+--- a/crates/signex-app/src/app/dispatch/library/components_panel.rs
++++ b/crates/signex-app/src/app/dispatch/library/components_panel.rs
+@@ -5,6 +5,8 @@
+ //! Extracted verbatim from the library dispatcher (`dispatch/library`);
+ //! pure code motion, zero behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::{DialogFolders, FileHandlePath};
+ use super::*;
+ 
+ impl Signex {
+diff --git a/crates/signex-app/src/app/dispatch/library/lifecycle.rs b/crates/signex-app/src/app/dispatch/library/lifecycle.rs
+index 5996e5d..657a881 100644
+--- a/crates/signex-app/src/app/dispatch/library/lifecycle.rs
++++ b/crates/signex-app/src/app/dispatch/library/lifecycle.rs
+@@ -5,6 +5,8 @@
+ //! Extracted verbatim from the library dispatcher (`dispatch/library`);
+ //! pure code motion, zero behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::{DialogFolders, FileHandlePath};
+ use super::*;
+ 
+ impl Signex {
+diff --git a/crates/signex-app/src/app/dispatch/library/primitive_picker.rs b/crates/signex-app/src/app/dispatch/library/primitive_picker.rs
+index b389bb5..cb9689e 100644
+--- a/crates/signex-app/src/app/dispatch/library/primitive_picker.rs
++++ b/crates/signex-app/src/app/dispatch/library/primitive_picker.rs
+@@ -5,6 +5,8 @@
+ //! Extracted verbatim from the library dispatcher (`dispatch/library`);
+ //! pure code motion, zero behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use super::*;
+ 
+ impl Signex {
+diff --git a/crates/signex-app/src/app/dispatch/library/recovery.rs b/crates/signex-app/src/app/dispatch/library/recovery.rs
+index d8a8967..93e397c 100644
+--- a/crates/signex-app/src/app/dispatch/library/recovery.rs
++++ b/crates/signex-app/src/app/dispatch/library/recovery.rs
+@@ -5,6 +5,8 @@
+ //! Extracted verbatim from the library dispatcher (`dispatch/library`);
+ //! pure code motion, zero behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use super::*;
+ 
+ /// Atomic write — write `bytes` to `<path>.tmp` then `rename` over
+diff --git a/crates/signex-app/src/app/dispatch/library/registration.rs b/crates/signex-app/src/app/dispatch/library/registration.rs
+index 315895f..3fb8d09 100644
+--- a/crates/signex-app/src/app/dispatch/library/registration.rs
++++ b/crates/signex-app/src/app/dispatch/library/registration.rs
+@@ -6,6 +6,8 @@
+ //! Extracted verbatim from the library dispatcher (`dispatch/library`);
+ //! pure code motion, zero behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use super::*;
+ 
+ impl Signex {
+diff --git a/crates/signex-app/src/app/dispatch/library/settings.rs b/crates/signex-app/src/app/dispatch/library/settings.rs
+index f5937ca..b490b35 100644
+--- a/crates/signex-app/src/app/dispatch/library/settings.rs
++++ b/crates/signex-app/src/app/dispatch/library/settings.rs
+@@ -7,6 +7,18 @@
+ use super::*;
+ 
+ impl Signex {
++    /// Web build: distributor / API-credential integrations need the OS
++    /// keyring, a localhost OAuth callback server and blocking HTTP — none
++    /// of which exist in the browser. Answer every settings action with a
++    /// visible status instead of dispatching it.
++    #[cfg(target_arch = "wasm32")]
++    pub(super) fn handle_library_settings_message(&mut self, _msg: SettingsMsg) -> Task<Message> {
++        self.library.settings.digikey_status =
++            Some("Distributor integrations are not available in the web build".to_string());
++        Task::none()
++    }
++
++    #[cfg(not(target_arch = "wasm32"))]
+     pub(super) fn handle_library_settings_message(&mut self, msg: SettingsMsg) -> Task<Message> {
+         use crate::library::settings::{digikey_oauth, persistence};
+         use signex_library::distributor::DistributorAdapter;
+diff --git a/crates/signex-app/src/app/dispatch/overlay.rs b/crates/signex-app/src/app/dispatch/overlay.rs
+index bd9d12f..42713aa 100644
+--- a/crates/signex-app/src/app/dispatch/overlay.rs
++++ b/crates/signex-app/src/app/dispatch/overlay.rs
+@@ -216,7 +216,7 @@ impl Signex {
+                 // timer and mark the launcher zone as hovered. The
+                 // close timer (if any) gets cancelled by the zone
+                 // refresh below.
+-                self.interaction_state.pending_submenu = Some((kind, std::time::Instant::now()));
++                self.interaction_state.pending_submenu = Some((kind, iced::time::Instant::now()));
+                 self.interaction_state.submenu_launcher_hovered = Some(kind);
+                 self.refresh_submenu_hover_state();
+                 Task::none()
+@@ -495,7 +495,7 @@ impl Signex {
+         } else if self.interaction_state.context_submenu.is_some()
+             && self.interaction_state.submenu_unhovered_since.is_none()
+         {
+-            self.interaction_state.submenu_unhovered_since = Some(std::time::Instant::now());
++            self.interaction_state.submenu_unhovered_since = Some(iced::time::Instant::now());
+         }
+     }
+ }
+diff --git a/crates/signex-app/src/app/handlers/canvas/mod.rs b/crates/signex-app/src/app/handlers/canvas/mod.rs
+index 02b668a..f06a1fb 100644
+--- a/crates/signex-app/src/app/handlers/canvas/mod.rs
++++ b/crates/signex-app/src/app/handlers/canvas/mod.rs
+@@ -66,7 +66,7 @@ impl Signex {
+                 if hover_uuid != self.interaction_state.hover_symbol_uuid {
+                     self.interaction_state.hover_symbol_uuid = hover_uuid;
+                     self.interaction_state.hover_started_at =
+-                        hover_uuid.map(|_| std::time::Instant::now());
++                        hover_uuid.map(|_| iced::time::Instant::now());
+                 }
+                 // Track screen position for the tooltip's translate
+                 // offset on every move, even if the symbol is the
+diff --git a/crates/signex-app/src/app/handlers/dock/project_navigation/add.rs b/crates/signex-app/src/app/handlers/dock/project_navigation/add.rs
+index 3e5447e..22afc36 100644
+--- a/crates/signex-app/src/app/handlers/dock/project_navigation/add.rs
++++ b/crates/signex-app/src/app/handlers/dock/project_navigation/add.rs
+@@ -4,6 +4,8 @@
+ //! (`handlers/dock/project_navigation`); pure code motion, zero
+ //! behaviour change.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use super::*;
+ 
+ impl Signex {
+diff --git a/crates/signex-app/src/app/handlers/dock/project_navigation/mod.rs b/crates/signex-app/src/app/handlers/dock/project_navigation/mod.rs
+index fd6c05d..c49e72a 100644
+--- a/crates/signex-app/src/app/handlers/dock/project_navigation/mod.rs
++++ b/crates/signex-app/src/app/handlers/dock/project_navigation/mod.rs
+@@ -59,7 +59,7 @@ impl Signex {
+                 // click of a fresh sequence.
+                 const TREE_DOUBLE_CLICK_WINDOW: std::time::Duration =
+                     std::time::Duration::from_millis(500);
+-                let now = std::time::Instant::now();
++                let now = iced::time::Instant::now();
+                 let is_double = matches!(
+                     &self.interaction_state.last_tree_click,
+                     Some((prev, t)) if prev == path && now.duration_since(*t) <= TREE_DOUBLE_CLICK_WINDOW
+diff --git a/crates/signex-app/src/app/handlers/document_files/git.rs b/crates/signex-app/src/app/handlers/document_files/git.rs
+index 75489eb..29e5ade 100644
+--- a/crates/signex-app/src/app/handlers/document_files/git.rs
++++ b/crates/signex-app/src/app/handlers/document_files/git.rs
+@@ -87,6 +87,14 @@ impl Signex {
+     /// `index.add_path` with the user's next save. Not data loss —
+     /// every save's content is captured by *some* commit — but the
+     /// commit-message vs blob-content correspondence is best-effort.
++    /// Web build: no local git repos — drop the queue so it cannot grow.
++    #[cfg(target_arch = "wasm32")]
++    pub(crate) fn drain_pending_git_commits(&mut self) -> iced::Task<crate::app::Message> {
++        self.document_state.pending_git_commits.clear();
++        iced::Task::none()
++    }
++
++    #[cfg(not(target_arch = "wasm32"))]
+     pub(crate) fn drain_pending_git_commits(&mut self) -> iced::Task<crate::app::Message> {
+         if self.document_state.pending_git_commits.is_empty() {
+             return iced::Task::none();
+diff --git a/crates/signex-app/src/app/handlers/document_files/mod.rs b/crates/signex-app/src/app/handlers/document_files/mod.rs
+index 1527c7e..9bacb72 100644
+--- a/crates/signex-app/src/app/handlers/document_files/mod.rs
++++ b/crates/signex-app/src/app/handlers/document_files/mod.rs
+@@ -1,5 +1,7 @@
+ //! Document-file open / save / git / history handler impls for `Signex`.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use std::path::PathBuf;
+ 
+ 
+diff --git a/crates/signex-app/src/app/handlers/menu/export/bom.rs b/crates/signex-app/src/app/handlers/menu/export/bom.rs
+index be6bfbd..d0de858 100644
+--- a/crates/signex-app/src/app/handlers/menu/export/bom.rs
++++ b/crates/signex-app/src/app/handlers/menu/export/bom.rs
+@@ -1,5 +1,7 @@
+ //! BOM preview modal handlers. Split from `menu/export.rs`.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use std::path::PathBuf;
+ 
+ use iced::Task;
+diff --git a/crates/signex-app/src/app/handlers/menu/export/pdf_netlist.rs b/crates/signex-app/src/app/handlers/menu/export/pdf_netlist.rs
+index cf6754b..408f720 100644
+--- a/crates/signex-app/src/app/handlers/menu/export/pdf_netlist.rs
++++ b/crates/signex-app/src/app/handlers/menu/export/pdf_netlist.rs
+@@ -1,5 +1,7 @@
+ //! Export handlers — PDF export dialog + netlist export. Split from `menu/export.rs`.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use std::path::PathBuf;
+ 
+ use iced::Task;
+diff --git a/crates/signex-app/src/app/handlers/menu/export/print_preview.rs b/crates/signex-app/src/app/handlers/menu/export/print_preview.rs
+index bead756..188eb24 100644
+--- a/crates/signex-app/src/app/handlers/menu/export/print_preview.rs
++++ b/crates/signex-app/src/app/handlers/menu/export/print_preview.rs
+@@ -1,5 +1,7 @@
+ //! Print-preview modal handlers. Split from `menu/export.rs`.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use std::path::PathBuf;
+ 
+ use iced::Task;
+diff --git a/crates/signex-app/src/app/handlers/menu/file_commands.rs b/crates/signex-app/src/app/handlers/menu/file_commands.rs
+index 9981e89..a14b6fa 100644
+--- a/crates/signex-app/src/app/handlers/menu/file_commands.rs
++++ b/crates/signex-app/src/app/handlers/menu/file_commands.rs
+@@ -1,3 +1,5 @@
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::FileHandlePath;
+ use iced::Task;
+ 
+ use super::super::super::*;
+diff --git a/crates/signex-app/src/app/runtime/history.rs b/crates/signex-app/src/app/runtime/history.rs
+index 0736a7c..68c728a 100644
+--- a/crates/signex-app/src/app/runtime/history.rs
++++ b/crates/signex-app/src/app/runtime/history.rs
+@@ -50,6 +50,18 @@ impl Signex {
+                 self.document_state.panel_ctx.history = self.document_state.history.clone();
+                 Task::none()
+             }
++            // Web build: no .git ancestors to walk — render as NoRepo.
++            #[cfg(target_arch = "wasm32")]
++            Some(HistoryTarget::Tracked { full_path, .. }) => {
++                self.document_state.history.loading = false;
++                self.document_state.history.dirty =
++                    self.document_state.dirty_paths.contains(&full_path);
++                self.document_state.history.mode =
++                    crate::panels::history::HistoryRenderMode::NoRepo;
++                self.document_state.panel_ctx.history = self.document_state.history.clone();
++                Task::none()
++            }
++            #[cfg(not(target_arch = "wasm32"))]
+             Some(HistoryTarget::Tracked {
+                 project_dir,
+                 rel_path,
+diff --git a/crates/signex-app/src/app/state/interaction.rs b/crates/signex-app/src/app/state/interaction.rs
+index 8d38669..5052bf1 100644
+--- a/crates/signex-app/src/app/state/interaction.rs
++++ b/crates/signex-app/src/app/state/interaction.rs
+@@ -73,7 +73,7 @@ pub struct InteractionState {
+     /// is currently hovering. The 50 ms hover-tick subscription opens
+     /// the submenu once `hover_started_at + 200 ms <= Instant::now()`,
+     /// matching the standard Altium / Windows menu delay.
+-    pub pending_submenu: Option<(crate::app::ContextSubmenu, std::time::Instant)>,
++    pub pending_submenu: Option<(crate::app::ContextSubmenu, iced::time::Instant)>,
+     /// Which submenu launcher row the cursor is currently over, or
+     /// `None`. Paired with `submenu_panel_hovered` to decide whether
+     /// the open submenu should stay visible.
+@@ -84,7 +84,7 @@ pub struct InteractionState {
+     /// unhovered. The 50 ms tick closes the submenu once 150 ms has
+     /// elapsed, giving the user time to cross the gap between the two
+     /// zones without the menu collapsing mid-traversal.
+-    pub submenu_unhovered_since: Option<std::time::Instant>,
++    pub submenu_unhovered_since: Option<iced::time::Instant>,
+     pub last_mouse_pos: (f32, f32),
+     /// Project-tree click memo for the home-grown double-click gate.
+     /// First click on an openable leaf records `(path, instant)`; the
+@@ -94,7 +94,7 @@ pub struct InteractionState {
+     /// Iced's `button` widget consumes mouse events before iced 0.14
+     /// surfaces a built-in `on_double_click` for them, so we time the
+     /// clicks ourselves at the app layer.
+-    pub last_tree_click: Option<(Vec<usize>, std::time::Instant)>,
++    pub last_tree_click: Option<(Vec<usize>, iced::time::Instant)>,
+     pub active_bar_menu: Option<crate::active_bar::ActiveBarMenu>,
+     pub selection_filters: std::collections::HashSet<crate::active_bar::SelectionFilter>,
+     /// User-defined custom filter presets (capped at
+@@ -125,7 +125,7 @@ pub struct InteractionState {
+     /// to its current value. Used by the view to gate the tooltip
+     /// behind a 250 ms delay so hovering is a deliberate gesture.
+     /// Resets when the hovered uuid changes.
+-    pub hover_started_at: Option<std::time::Instant>,
++    pub hover_started_at: Option<iced::time::Instant>,
+     /// Last-known window-relative cursor position while hovering a
+     /// symbol — drives the tooltip's screen-space placement so the
+     /// card tracks the cursor (offset to bottom-right by ~16 px so it
+diff --git a/crates/signex-app/src/canvas/input/pointer.rs b/crates/signex-app/src/canvas/input/pointer.rs
+index d0d2001..81aea40 100644
+--- a/crates/signex-app/src/canvas/input/pointer.rs
++++ b/crates/signex-app/src/canvas/input/pointer.rs
+@@ -14,7 +14,7 @@ impl SchematicCanvas {
+             let wy = world.y as f64;
+ 
+             // Double-click detection (300ms, 3mm threshold)
+-            let now = std::time::Instant::now();
++            let now = iced::time::Instant::now();
+             if let (Some(last_time), Some(last_pos)) =
+                 (state.last_click_time, state.last_click_world)
+             {
+diff --git a/crates/signex-app/src/canvas/mod.rs b/crates/signex-app/src/canvas/mod.rs
+index 5fe3da1..6023040 100644
+--- a/crates/signex-app/src/canvas/mod.rs
++++ b/crates/signex-app/src/canvas/mod.rs
+@@ -57,7 +57,7 @@ pub struct CanvasState {
+     move_current: Option<(f64, f64)>,
+     // ─── Double-click detection ───
+     /// Timestamp of last left-click (for double-click detection).
+-    last_click_time: Option<std::time::Instant>,
++    last_click_time: Option<iced::time::Instant>,
+     /// World position of last left-click.
+     last_click_world: Option<(f64, f64)>,
+ }
+diff --git a/crates/signex-app/src/fonts/mod.rs b/crates/signex-app/src/fonts/mod.rs
+index b86b9ac..0cac1e5 100644
+--- a/crates/signex-app/src/fonts/mod.rs
++++ b/crates/signex-app/src/fonts/mod.rs
+@@ -10,6 +10,8 @@
+ //! macOS, `$XDG_CONFIG_HOME/signex/prefs.json` on Linux).
+ //! Format: `{"ui_font": "Roboto"}`
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::dirs;
+ use std::path::{Path, PathBuf};
+ use std::sync::{Mutex, OnceLock};
+ 
+diff --git a/crates/signex-app/src/keymap/profile.rs b/crates/signex-app/src/keymap/profile.rs
+index c846bb3..8355a62 100644
+--- a/crates/signex-app/src/keymap/profile.rs
++++ b/crates/signex-app/src/keymap/profile.rs
+@@ -1,3 +1,5 @@
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::dirs;
+ use crate::keymap::{
+     AppCommandId, KeyBindingSource, KeyStroke, ShortcutBinding, ShortcutBindingAction,
+     ShortcutContext, ShortcutTrigger,
+diff --git a/crates/signex-app/src/lib.rs b/crates/signex-app/src/lib.rs
+index ac60608..66e7523 100644
+--- a/crates/signex-app/src/lib.rs
++++ b/crates/signex-app/src/lib.rs
+@@ -37,3 +37,4 @@ pub mod styles;
+ pub mod tab_bar;
+ pub mod toolbar;
+ pub mod undo;
++pub mod web_compat;
+diff --git a/crates/signex-app/src/library/editor/symbol/canvas/input/tools.rs b/crates/signex-app/src/library/editor/symbol/canvas/input/tools.rs
+index a1f3328..6c9f876 100644
+--- a/crates/signex-app/src/library/editor/symbol/canvas/input/tools.rs
++++ b/crates/signex-app/src/library/editor/symbol/canvas/input/tools.rs
+@@ -275,7 +275,7 @@ impl SymbolCanvas<'_> {
+         // Close gesture 2: double-click on the same snapped vertex.
+         // Checked before appending so the second click of the pair
+         // never becomes a near-duplicate vertex.
+-        let now = std::time::Instant::now();
++        let now = iced::time::Instant::now();
+         if let (Some(last_time), Some(last_pos)) =
+             (state.polygon_last_click_time, state.polygon_last_click_pos)
+         {
+diff --git a/crates/signex-app/src/library/editor/symbol/canvas/types.rs b/crates/signex-app/src/library/editor/symbol/canvas/types.rs
+index acc746e..f516d88 100644
+--- a/crates/signex-app/src/library/editor/symbol/canvas/types.rs
++++ b/crates/signex-app/src/library/editor/symbol/canvas/types.rs
+@@ -282,7 +282,7 @@ pub struct CanvasState {
+     /// duplicate vertex. Ephemeral click-timing only, not vertex data
+     /// — see `polygon_cursor`'s doc comment for why that's safe to
+     /// leave in this per-widget-slot state.
+-    pub polygon_last_click_time: Option<std::time::Instant>,
++    pub polygon_last_click_time: Option<iced::time::Instant>,
+     /// Grid-snapped world position of the last `PlacePolygon`
+     /// left-click, paired with `polygon_last_click_time` for the
+     /// double-click check — the second click must land on the exact
+diff --git a/crates/signex-app/src/library/settings/mod.rs b/crates/signex-app/src/library/settings/mod.rs
+index dcb546f..d31be6e 100644
+--- a/crates/signex-app/src/library/settings/mod.rs
++++ b/crates/signex-app/src/library/settings/mod.rs
+@@ -2,6 +2,7 @@
+ //! tab; Phase 2 adds the AVL / template / lifecycle defaults panels
+ //! per v0.9-library-plan.md §13.
+ 
++#[cfg(not(target_arch = "wasm32"))] // OAuth needs a localhost callback server
+ pub mod digikey_oauth;
+ pub mod distributor_apis;
+ pub mod persistence;
+diff --git a/crates/signex-app/src/library/settings/persistence.rs b/crates/signex-app/src/library/settings/persistence.rs
+index 3ffa66e..5580ad7 100644
+--- a/crates/signex-app/src/library/settings/persistence.rs
++++ b/crates/signex-app/src/library/settings/persistence.rs
+@@ -16,6 +16,8 @@
+ //! - On save, an I/O failure is non-critical — the next save will
+ //!   just overwrite. A `tracing::warn!` surfaces the why.
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::dirs;
+ use std::path::PathBuf;
+ 
+ use serde::{Deserialize, Serialize};
+diff --git a/crates/signex-app/src/main.rs b/crates/signex-app/src/main.rs
+index d66f2d0..e3d829d 100644
+--- a/crates/signex-app/src/main.rs
++++ b/crates/signex-app/src/main.rs
+@@ -5,7 +5,9 @@
+ //! dispatchers without spinning up the iced runtime.
+ 
+ use signex_app::app::Signex;
+-use signex_app::{diagnostics, fonts};
++#[cfg(not(target_arch = "wasm32"))]
++use signex_app::diagnostics;
++use signex_app::fonts;
+ 
+ const IOSEVKA_REGULAR: &[u8] = include_bytes!("../assets/fonts/Iosevka-Regular.ttf");
+ const IOSEVKA_BOLD: &[u8] = include_bytes!("../assets/fonts/Iosevka-Bold.ttf");
+@@ -13,6 +15,14 @@ const ROBOTO_REGULAR: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf
+ const ROBOTO_BOLD: &[u8] = include_bytes!("../assets/fonts/Roboto-Bold.ttf");
+ 
+ fn main() -> iced::Result {
++    // Web: panics and log records must reach the browser console — the
++    // native SignexLogger writes to files that don't exist there.
++    #[cfg(target_arch = "wasm32")]
++    {
++        console_error_panic_hook::set_once();
++        let _ = console_log::init_with_level(log::Level::Info);
++    }
++    #[cfg(not(target_arch = "wasm32"))]
+     if let Err(error) = diagnostics::init_logging() {
+         eprintln!("[signex] failed to initialize logging: {error:#}");
+     }
+diff --git a/crates/signex-app/src/panels/components_panel/global_prefs.rs b/crates/signex-app/src/panels/components_panel/global_prefs.rs
+index adb5732..c2d9a6d 100644
+--- a/crates/signex-app/src/panels/components_panel/global_prefs.rs
++++ b/crates/signex-app/src/panels/components_panel/global_prefs.rs
+@@ -19,6 +19,8 @@
+ //! a missing or unparseable file warns through `tracing` and the
+ //! Components Panel renders the Global section empty (no panic).
+ 
++#[cfg(target_arch = "wasm32")]
++use crate::web_compat::dirs;
+ use std::path::{Path, PathBuf};
+ 
+ use serde::{Deserialize, Serialize};
+diff --git a/crates/signex-app/src/web_compat.rs b/crates/signex-app/src/web_compat.rs
+new file mode 100644
+index 0000000..d224bb1
+--- /dev/null
++++ b/crates/signex-app/src/web_compat.rs
+@@ -0,0 +1,52 @@
++//! Web-build (wasm32) compatibility shims.
++//!
++//! The browser has no real file paths, no folder picker and no XDG config
++//! directories. These shims keep the native dialog / persistence code paths
++//! compiling on wasm32 with the smallest possible diff; the affected flows
++//! degrade gracefully at runtime (fs calls error and surface through normal
++//! error reporting, folder pickers behave as cancelled, preferences stay
++//! session-local).
++
++#[cfg(target_arch = "wasm32")]
++mod wasm {
++    use std::path::PathBuf;
++
++    /// rfd's wasm `FileHandle` has no `path()` — browser files are
++    /// pathless. Modelling the handle as a bare-filename path keeps the
++    /// `.path().to_path_buf()` call sites compiling unchanged. On native
++    /// this trait is never resolved: the inherent `path()` wins.
++    pub trait FileHandlePath {
++        fn path(&self) -> PathBuf;
++    }
++
++    impl FileHandlePath for rfd::FileHandle {
++        fn path(&self) -> PathBuf {
++            PathBuf::from(self.file_name())
++        }
++    }
++
++    /// Browsers cannot pick directories through rfd — behave as if the
++    /// user cancelled the dialog.
++    pub trait DialogFolders {
++        fn pick_folder(self) -> std::future::Ready<Option<rfd::FileHandle>>;
++    }
++
++    impl DialogFolders for rfd::AsyncFileDialog {
++        fn pick_folder(self) -> std::future::Ready<Option<rfd::FileHandle>> {
++            std::future::ready(None)
++        }
++    }
++
++    /// `dirs` stand-in — no config directory in the browser, so every
++    /// consumer takes its existing "no config dir" fallback path.
++    pub mod dirs {
++        use std::path::PathBuf;
++
++        pub fn config_dir() -> Option<PathBuf> {
++            None
++        }
++    }
++}
++
++#[cfg(target_arch = "wasm32")]
++pub use wasm::*;
+diff --git a/crates/signex-library/src/adapters/local_git_stub.rs b/crates/signex-library/src/adapters/local_git_stub.rs
+new file mode 100644
+index 0000000..4e15fe1
+--- /dev/null
++++ b/crates/signex-library/src/adapters/local_git_stub.rs
+@@ -0,0 +1,124 @@
++//! Web-build stand-in for the `local-git` adapter.
++//!
++//! `git2` (vendored libgit2, C) does not build for wasm32, so the web build
++//! compiles without the `local-git` feature. signex-app, however, references
++//! the adapter unconditionally across its library subsystem. This stub keeps
++//! those call sites compiling with the same names and signatures; every
++//! constructor fails with a "not available in the web build" error, so no
++//! adapter value ever exists at runtime and the inherent accessors are
++//! unreachable.
++
++use std::path::Path;
++
++use crate::adapter::{LibraryAdapter, LibraryError};
++use crate::library_file::SnxlibManifest;
++use crate::manifest::Manifest;
++
++pub(crate) fn unsupported() -> LibraryError {
++    LibraryError::Backend("local file libraries are not available in the web build".into())
++}
++
++/// Mirror of the native `LibraryInitOptions` (dep-free, so duplicated
++/// verbatim rather than cfg-juggled out of the native module).
++#[derive(Debug, Default, Clone, Copy)]
++pub struct LibraryInitOptions {
++    pub enable_git: bool,
++    pub use_lfs: bool,
++}
++
++#[derive(Debug)]
++pub struct LocalGitAdapter;
++
++impl LocalGitAdapter {
++    pub fn init(
++        _file_path: impl AsRef<Path>,
++        _snx_manifest: SnxlibManifest,
++        _opts: LibraryInitOptions,
++    ) -> Result<Self, LibraryError> {
++        Err(unsupported())
++    }
++
++    pub fn open(_file_path: impl AsRef<Path>) -> Result<Self, LibraryError> {
++        Err(unsupported())
++    }
++
++    pub fn recover_init(_file_path: impl AsRef<Path>) -> Result<Self, LibraryError> {
++        Err(unsupported())
++    }
++
++    pub fn root(&self) -> &Path {
++        unreachable!("LocalGitAdapter cannot be constructed in the web build")
++    }
++
++    pub fn file_path_buf(&self) -> &Path {
++        unreachable!("LocalGitAdapter cannot be constructed in the web build")
++    }
++}
++
++impl LibraryAdapter for LocalGitAdapter {
++    fn manifest(&self) -> &Manifest {
++        unreachable!("LocalGitAdapter cannot be constructed in the web build")
++    }
++}
++
++pub mod project {
++    use std::path::{Path, PathBuf};
++
++    use super::unsupported;
++    use crate::adapter::{HistoryEntry, LibraryError};
++
++    /// Opaque stand-in for `git2::Oid` — callers only display it.
++    #[derive(Debug, Clone, Copy)]
++    pub struct CommitOid;
++
++    impl std::fmt::Display for CommitOid {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            f.write_str("0000000000000000000000000000000000000000")
++        }
++    }
++
++    #[derive(Debug)]
++    pub struct LocalGitProjectAdapter;
++
++    impl LocalGitProjectAdapter {
++        pub fn open_or_init(_project_root: PathBuf) -> Result<Self, LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn commit_path(
++            &self,
++            _rel_path: &Path,
++            _message: &str,
++        ) -> Result<CommitOid, LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn commit_external_change(
++            &self,
++            _abs_path: &Path,
++            _message: &str,
++        ) -> Result<CommitOid, LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn file_history(
++            &self,
++            _rel_path: &Path,
++            _limit: usize,
++        ) -> Result<Vec<HistoryEntry>, LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn restore_at_from_sha(&self, _rel_path: &Path, _sha: &str) -> Result<(), LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn write_gitattributes(&self, _use_lfs: bool) -> Result<(), LibraryError> {
++            Err(unsupported())
++        }
++
++        pub fn project_root(&self) -> &Path {
++            unreachable!("LocalGitProjectAdapter cannot be constructed in the web build")
++        }
++    }
++}
+diff --git a/crates/signex-library/src/adapters/mod.rs b/crates/signex-library/src/adapters/mod.rs
+index 075a64e..2f8b8ac 100644
+--- a/crates/signex-library/src/adapters/mod.rs
++++ b/crates/signex-library/src/adapters/mod.rs
+@@ -14,10 +14,15 @@
+ #[cfg(feature = "local-git")]
+ pub mod local_git;
+ 
++// Web build: same module path, stub implementation — see local_git_stub.rs.
++#[cfg(all(not(feature = "local-git"), target_arch = "wasm32"))]
++#[path = "local_git_stub.rs"]
++pub mod local_git;
++
+ // The project-scoped adapter now lives at `local_git::project`; keep
+ // the flat `local_git_project` path so external
+ // `adapters::local_git_project::…` consumers resolve unchanged.
+-#[cfg(feature = "local-git")]
++#[cfg(any(feature = "local-git", target_arch = "wasm32"))]
+ pub use local_git::project as local_git_project;
+ 
+ #[cfg(feature = "database")]
+diff --git a/crates/signex-library/src/lib.rs b/crates/signex-library/src/lib.rs
+index 09f3ac2..18e904f 100644
+--- a/crates/signex-library/src/lib.rs
++++ b/crates/signex-library/src/lib.rs
+@@ -82,8 +82,10 @@ pub use tables::{
+ pub use templates::{ParamKind, ParamSlot, ParameterTemplate, TemplateRegistry, TemplateViolation};
+ pub use where_used::{UseSite, WhereUsedIndex};
+ 
+-#[cfg(feature = "local-git")]
++#[cfg(any(feature = "local-git", target_arch = "wasm32"))]
+ pub use adapters::local_git::LocalGitAdapter;
++#[cfg(all(not(feature = "local-git"), target_arch = "wasm32"))]
++pub use adapters::local_git::LibraryInitOptions;
+ 
+ /// Project-level "Enable Version Control" helper. Runs
+ /// `git2::Repository::init` at `project_dir`, optionally writes a
+@@ -97,6 +99,25 @@ pub use adapters::local_git::LocalGitAdapter;
+ /// flow doesn't need to pull `git2` in directly. Errors propagate
+ /// through the existing [`adapter::LibraryError`] variants so the UI
+ /// can surface them in one place.
++/// Web-build stub — no local git repos in the browser.
++#[cfg(all(not(feature = "local-git"), target_arch = "wasm32"))]
++pub fn enable_project_version_control(
++    _project_dir: &std::path::Path,
++    _use_lfs: bool,
++    _gitignore: Option<&str>,
++) -> Result<(), adapter::LibraryError> {
++    Err(adapters::local_git::unsupported())
++}
++
++/// Web-build stub — no local git repos in the browser.
++#[cfg(all(not(feature = "local-git"), target_arch = "wasm32"))]
++pub fn project_file_history(
++    _project_dir: &std::path::Path,
++    _rel_path: &std::path::Path,
++) -> Result<Vec<adapter::HistoryEntry>, adapter::LibraryError> {
++    Err(adapters::local_git::unsupported())
++}
++
+ #[cfg(feature = "local-git")]
+ pub fn enable_project_version_control(
+     project_dir: &std::path::Path,
+diff --git a/crates/signex-sketch/Cargo.toml b/crates/signex-sketch/Cargo.toml
+index cfe688d..6329269 100644
+--- a/crates/signex-sketch/Cargo.toml
++++ b/crates/signex-sketch/Cargo.toml
+@@ -16,3 +16,7 @@ signex-types = { workspace = true }
+ 
+ [dev-dependencies]
+ approx = "0.5"
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++# std::time::Instant panics on wasm32-unknown-unknown; web-time is a drop-in.
++web-time = "1"
+diff --git a/crates/signex-sketch/src/solver/lm.rs b/crates/signex-sketch/src/solver/lm.rs
+index af92655..aa6c903 100644
+--- a/crates/signex-sketch/src/solver/lm.rs
++++ b/crates/signex-sketch/src/solver/lm.rs
+@@ -36,7 +36,10 @@
+ //!   so the caller can show a useful error rather than retrying
+ //!   forever).
+ 
++#[cfg(not(target_arch = "wasm32"))]
+ use std::time::Instant;
++#[cfg(target_arch = "wasm32")]
++use web_time::Instant;
+ 
+ use crate::error::SolveError;
+ use crate::sketch::SketchData;
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..0090f60
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,57 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <title>Signex EDA</title>
++    <link
++      data-trunk
++      rel="rust"
++      href="crates/signex-app/Cargo.toml"
++      data-bin="signex"
++      data-wasm-opt="1"
++      data-wasm-opt-params="--all-features"
++    />
++    <style>
++      /* The iced shell appends one <canvas> per window to <body>; the first
++         one is the main workspace window — let it fill the viewport. */
++      html,
++      body {
++        margin: 0;
++        padding: 0;
++        width: 100%;
++        height: 100%;
++        overflow: hidden;
++        background: #1a1b1e;
++      }
++      canvas {
++        display: block;
++        width: 100%;
++        height: 100%;
++        outline: none;
++      }
++      #signex-loading {
++        position: fixed;
++        inset: 0;
++        display: flex;
++        align-items: center;
++        justify-content: center;
++        color: #8a8f98;
++        font: 14px system-ui, sans-serif;
++        pointer-events: none;
++      }
++    </style>
++  </head>
++  <body>
++    <div id="signex-loading">Loading Signex…</div>
++    <script>
++      // Remove the loading hint once the app's first canvas appears.
++      new MutationObserver((_, observer) => {
++        if (document.querySelector("canvas")) {
++          document.getElementById("signex-loading")?.remove();
++          observer.disconnect();
++        }
++      }).observe(document.body, { childList: true });
++    </script>
++  </body>
++</html>

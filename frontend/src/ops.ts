@@ -2,7 +2,7 @@
 
 import { api } from './api'
 import { confirmModal, promptModal } from './dialogs'
-import { isCad, isOffice } from './media'
+import { isCad, isEda, isOffice } from './media'
 import { buildRows, dirOf, inTrash, KEEP_FILE, Row, TRASH_DIR, useStore } from './store'
 
 export function rowPath(row: Row): string {
@@ -19,6 +19,8 @@ export function openRow(row: Row): void {
   if (row.kind === 'folder') store.setDir(rowPath(row))
   else if (row.entry && isCad(row.entry.file_name) && !inTrash(store.currentDir))
     store.setCadEntry(row.entry)
+  else if (row.entry && isEda(row.entry.file_name) && !inTrash(store.currentDir))
+    store.setEdaEntry(row.entry)
   else if (row.entry && isOffice(row.entry.file_name) && !inTrash(store.currentDir))
     store.setOfficeEntry(row.entry) // Collabora is both viewer and editor
   else if (row.entry) store.setPreview(row.entry) // preview by default, edit via context menu
@@ -85,6 +87,62 @@ export async function createCadFile(): Promise<void> {
     await store.refreshIndex(true)
     const entry = useStore.getState().entries.find((e) => e.id === result.id)
     if (entry) store.setCadEntry(entry)
+  } catch (error) {
+    store.toast('error', (error as Error).message)
+  }
+}
+
+// Blank Signex schematic — the exact serialisation Signex v0.14 produces for
+// an empty A4 sheet (TOML envelope + TSV bulk blocks), with a fresh uuid per
+// file. Plain text, so it flows through the same save pipeline as markdown.
+const blankSnxsch = () => `format = "snxsch/1"
+schematic_id = "${crypto.randomUUID()}"
+version = 1
+generator = "signex"
+generator_version = "0.14.0"
+paper_size = "A4"
+root_sheet_page = "1"
+
+
+[sheets.components]
+content = """
+uuid  ref  library  pos_x  pos_y  rotation  value  mpn
+"""
+
+[sheets.wires]
+content = """
+uuid  net  start_x  start_y  end_x  end_y  stroke_width
+"""
+
+[sheets.junctions]
+content = """
+uuid  pos_x  pos_y  diameter
+"""
+
+[sheets.labels]
+content = """
+uuid  text  pos_x  pos_y  rotation  kind  shape  font_size  justify  justify_v
+"""
+`
+
+/** Create a blank .snxsch (auto-named like office files) and open it in Signex. */
+export async function createEdaFile(): Promise<void> {
+  const store = useStore.getState()
+  const chatId = store.currentDrive
+  if (!chatId) return
+  const dir = dirOf(store.currentDir)
+  const taken = new Set(
+    store.entries
+      .filter((e) => e.virtual_path === dir)
+      .map((e) => e.file_name.toLowerCase()),
+  )
+  let name = 'New Schematic.snxsch'
+  for (let n = 1; taken.has(name.toLowerCase()) && n < 1000; n++) name = `New Schematic_${n}.snxsch`
+  try {
+    const result = await api.saveText(chatId, `${dir}${name}`, blankSnxsch())
+    await store.refreshIndex(true)
+    const entry = useStore.getState().entries.find((e) => e.id === result.id)
+    if (entry) store.setEdaEntry(entry)
   } catch (error) {
     store.toast('error', (error as Error).message)
   }

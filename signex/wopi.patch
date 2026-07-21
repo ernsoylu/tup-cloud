@@ -1,0 +1,357 @@
+diff --git a/crates/signex-app/src/app/bootstrap/new.rs b/crates/signex-app/src/app/bootstrap/new.rs
+index ec7707a..ac1d281 100644
+--- a/crates/signex-app/src/app/bootstrap/new.rs
++++ b/crates/signex-app/src/app/bootstrap/new.rs
+@@ -350,6 +350,19 @@ impl Signex {
+         });
+         app.ui_state.main_window_id = Some(main_id);
+         let boot_task = open_task.map(|id| Message::Window(WindowMsg::MainWindowOpened(id)));
++        // Embedded by a WOPI-style host (?wopi=…&access_token=…): fetch and
++        // open the hosted document automatically; Save then uploads back.
++        #[cfg(target_arch = "wasm32")]
++        let boot_task = if crate::web_wopi::session_params().is_some() {
++            iced::Task::batch([
++                boot_task,
++                iced::Task::perform(crate::web_wopi::load_wopi(), |result| {
++                    Message::File(FileMsg::WopiOpened(result))
++                }),
++            ])
++        } else {
++            boot_task
++        };
+         (app, boot_task)
+     }
+ }
+diff --git a/crates/signex-app/src/app/contracts/dialogs.rs b/crates/signex-app/src/app/contracts/dialogs.rs
+index 3708b8a..ccdfa45 100644
+--- a/crates/signex-app/src/app/contracts/dialogs.rs
++++ b/crates/signex-app/src/app/contracts/dialogs.rs
+@@ -251,6 +251,17 @@ pub enum SelectionFilterMsg {
+ #[allow(dead_code)]
+ pub enum FileMsg {
+     Opened(Option<PathBuf>),
++    /// Web: the WOPI session fetch finished — `(file name, file text)` on
++    /// success. Native: never emitted.
++    #[cfg(target_arch = "wasm32")]
++    WopiOpened(Result<(String, String), String>),
++    /// Web: a WOPI save-back (Ctrl+S in an embedded session) finished for
++    /// `path`. Native: never emitted.
++    #[cfg(target_arch = "wasm32")]
++    WopiSaved {
++        path: PathBuf,
++        result: Result<(), String>,
++    },
+     /// File ▸ New Project — destination picked by the Save-As dialog.
+     /// `None` when the user cancelled the picker; on `Some(path)` the
+     /// handler writes a fresh `<stem>.snxprj` (empty marker file — the
+diff --git a/crates/signex-app/src/app/dispatch/document.rs b/crates/signex-app/src/app/dispatch/document.rs
+index 1f87ebc..0cf8d32 100644
+--- a/crates/signex-app/src/app/dispatch/document.rs
++++ b/crates/signex-app/src/app/dispatch/document.rs
+@@ -86,6 +86,16 @@ impl Signex {
+                 self.handle_document_file_opened(path);
+                 self.finish_update()
+             }
++            #[cfg(target_arch = "wasm32")]
++            FileMsg::WopiOpened(result) => {
++                self.handle_wopi_opened(result);
++                self.finish_update()
++            }
++            #[cfg(target_arch = "wasm32")]
++            FileMsg::WopiSaved { path, result } => {
++                self.handle_wopi_saved(path, result);
++                self.finish_update()
++            }
+             FileMsg::NewProject(path) => {
+                 self.handle_new_project_file(path);
+                 self.finish_update()
+diff --git a/crates/signex-app/src/app/documents.rs b/crates/signex-app/src/app/documents.rs
+index 081d046..af0f6cc 100644
+--- a/crates/signex-app/src/app/documents.rs
++++ b/crates/signex-app/src/app/documents.rs
+@@ -147,6 +147,14 @@ impl SchematicTabSession {
+         Ok(())
+     }
+ 
++    /// Serialise the current document to `.snxsch` text without touching
++    /// the filesystem — the web build's WOPI save path uploads this.
++    pub fn to_snx_string(&self) -> Result<String, String> {
++        signex_types::format::SnxSchematic::new(self.engine.document().clone())
++            .write_string()
++            .map_err(|error| error.to_string())
++    }
++
+     pub fn into_parts(self) -> (signex_engine::Engine, String, PathBuf, bool) {
+         (self.engine, self.title, self.path, self.dirty)
+     }
+diff --git a/crates/signex-app/src/app/handlers/document_files/open.rs b/crates/signex-app/src/app/handlers/document_files/open.rs
+index e74d009..6dea364 100644
+--- a/crates/signex-app/src/app/handlers/document_files/open.rs
++++ b/crates/signex-app/src/app/handlers/document_files/open.rs
+@@ -196,6 +196,46 @@ impl Signex {
+         Ok(id)
+     }
+ 
++    /// Web: a WOPI host handed us the document as text — parse and open it
++    /// exactly like the fs-backed paths, then mark the session live so
++    /// Ctrl+S uploads back instead of writing to the fs.
++    #[cfg(target_arch = "wasm32")]
++    pub(crate) fn handle_wopi_opened(&mut self, result: std::result::Result<(String, String), String>) {
++        let (name, text) = match result {
++            Ok(pair) => pair,
++            Err(error) => {
++                log::error!("[wopi] fetching the hosted document failed: {error}");
++                return;
++            }
++        };
++        let path = PathBuf::from(&name);
++        let title = path
++            .file_stem()
++            .map(|stem| stem.to_string_lossy().to_string())
++            .unwrap_or_else(|| "Document".to_string());
++        let extension = path
++            .extension()
++            .and_then(|e| e.to_str())
++            .unwrap_or("")
++            .to_ascii_lowercase();
++        let outcome = match extension.as_str() {
++            "snxsch" => signex_types::format::SnxSchematic::parse(&text)
++                .map(|snx| self.open_schematic_tab(path.clone(), title, snx.sheet))
++                .map_err(|e| e.to_string()),
++            "snxpcb" => signex_types::format::SnxPcb::parse(&text)
++                .map(|snx| self.open_pcb_tab(path.clone(), title, snx.board))
++                .map_err(|e| e.to_string()),
++            other => Err(format!("unsupported file type .{other} for web editing")),
++        };
++        match outcome {
++            Ok(()) => {
++                crate::web_wopi::set_active_name(name.clone());
++                log::info!("[wopi] Opened {name}");
++            }
++            Err(error) => log::error!("[wopi] opening {name} failed: {error}"),
++        }
++    }
++
+     fn open_schematic_file(&mut self, path: PathBuf) -> Result<()> {
+         // Try to load the companion project so the schematic tab gets
+         // a `project_id` via `project_for_path`. Best-effort: a missing
+diff --git a/crates/signex-app/src/app/handlers/document_files/save.rs b/crates/signex-app/src/app/handlers/document_files/save.rs
+index 1b79e18..59aa45c 100644
+--- a/crates/signex-app/src/app/handlers/document_files/save.rs
++++ b/crates/signex-app/src/app/handlers/document_files/save.rs
+@@ -45,6 +45,40 @@ impl Signex {
+                 _ => {}
+             }
+         }
++        // Web, embedded by a WOPI-style host: plain Save serialises the
++        // active schematic and uploads it back to the host (the cloud
++        // drive) instead of writing to the nonexistent local fs. The tab's
++        // dirty bit clears when the upload confirms (`FileMsg::WopiSaved`).
++        #[cfg(target_arch = "wasm32")]
++        if crate::web_wopi::active() {
++            if let Some(serialised) =
++                self.with_active_schematic_session_mut(|session| session.to_snx_string())
++            {
++                match serialised {
++                    Ok(text) => {
++                        let path = self.active_tab_path().unwrap_or_default();
++                        crate::diagnostics::log_info(format!(
++                            "[wopi] Saving {}…",
++                            path.display()
++                        ));
++                        return Ok(iced::Task::perform(
++                            crate::web_wopi::put_wopi(text),
++                            move |result| {
++                                Message::File(FileMsg::WopiSaved {
++                                    path: path.clone(),
++                                    result,
++                                })
++                            },
++                        ));
++                    }
++                    Err(error) => {
++                        log::error!("[wopi] serialising the schematic failed: {error}");
++                        return Ok(iced::Task::none());
++                    }
++                }
++            }
++            return Ok(iced::Task::none());
++        }
+         if let Some(result) = self.with_active_schematic_session_mut(|session| session.save()) {
+             result.context("save active schematic session")?;
+             let path = self.active_tab_path().unwrap_or_default();
+@@ -91,6 +125,35 @@ impl Signex {
+         Ok(iced::Task::none())
+     }
+ 
++    /// Web: the WOPI upload for `path` finished — clear the dirty state on
++    /// success so the tab and project tree reflect the saved document.
++    #[cfg(target_arch = "wasm32")]
++    pub(crate) fn handle_wopi_saved(
++        &mut self,
++        path: std::path::PathBuf,
++        result: std::result::Result<(), String>,
++    ) {
++        match result {
++            Ok(()) => {
++                self.document_state.dirty_paths.remove(&path);
++                if let Some(tab) = self
++                    .document_state
++                    .tabs
++                    .iter_mut()
++                    .find(|tab| tab.path == path)
++                {
++                    tab.dirty = false;
++                }
++                self.refresh_panel_ctx();
++                crate::diagnostics::log_info(format!(
++                    "[wopi] Saved {} to the cloud drive",
++                    path.display()
++                ));
++            }
++            Err(error) => log::error!("[wopi] save to cloud failed: {error}"),
++        }
++    }
++
+     /// Persist the active project's `.snxprj` JSON when its dirty bit
+     /// is set in `dirty_paths`. No-op if no project is active or the
+     /// project file isn't dirty.
+diff --git a/crates/signex-app/src/lib.rs b/crates/signex-app/src/lib.rs
+index 66e7523..a64d158 100644
+--- a/crates/signex-app/src/lib.rs
++++ b/crates/signex-app/src/lib.rs
+@@ -38,3 +38,5 @@ pub mod tab_bar;
+ pub mod toolbar;
+ pub mod undo;
+ pub mod web_compat;
++#[cfg(target_arch = "wasm32")]
++pub mod web_wopi;
+diff --git a/crates/signex-app/src/web_wopi.rs b/crates/signex-app/src/web_wopi.rs
+new file mode 100644
+index 0000000..3cf1d85
+--- /dev/null
++++ b/crates/signex-app/src/web_wopi.rs
+@@ -0,0 +1,123 @@
++//! WOPI-style host integration for the web build.
++//!
++//! When the app is embedded by a cloud host (e.g. tup-cloud), the iframe URL
++//! carries `?wopi=<file endpoint>&access_token=<token>`. The endpoint speaks
++//! a WOPI-like protocol — the same shape Collabora Online uses:
++//!
++//! - `GET  {wopi}?access_token=…`           → file info JSON (`BaseFileName`)
++//! - `GET  {wopi}/contents?access_token=…`  → file text (`.snx*` are text)
++//! - `POST {wopi}/contents?access_token=…`  → save file text back
++//!
++//! With a session present the document is fetched and opened automatically at
++//! boot, and plain Save (Ctrl+S) uploads back to the host instead of writing
++//! to the (nonexistent) local filesystem.
++
++#![cfg(target_arch = "wasm32")]
++
++use std::cell::RefCell;
++
++use wasm_bindgen::{JsCast, JsValue};
++use wasm_bindgen_futures::JsFuture;
++
++thread_local! {
++    /// The host file name once a WOPI document was opened successfully.
++    /// Doubles as the "session is live" flag for the save path.
++    static WOPI_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
++}
++
++/// `(wopi_src, access_token)` from the page URL, if the host embedded us.
++pub fn session_params() -> Option<(String, String)> {
++    let search = web_sys::window()?.location().search().ok()?;
++    let query = search.strip_prefix('?').unwrap_or(&search);
++    let mut src = None;
++    let mut token = None;
++    for pair in query.split('&') {
++        let (key, value) = pair.split_once('=')?;
++        let decoded = js_sys::decode_uri_component(value).ok()?.as_string()?;
++        match key {
++            "wopi" => src = Some(decoded),
++            "access_token" => token = Some(decoded),
++            _ => {}
++        }
++    }
++    Some((src?, token?))
++}
++
++/// True once a WOPI document is open — Save then uploads to the host.
++pub fn active() -> bool {
++    WOPI_NAME.with(|n| n.borrow().is_some())
++}
++
++/// The host-side file name (e.g. `board.snxsch`) of the active session.
++pub fn file_name() -> Option<String> {
++    WOPI_NAME.with(|n| n.borrow().clone())
++}
++
++/// Mark the session live once the fetched document actually opened.
++pub(crate) fn set_active_name(name: String) {
++    WOPI_NAME.with(|n| *n.borrow_mut() = Some(name));
++}
++
++async fn fetch_response(url: &str) -> Result<web_sys::Response, String> {
++    let window = web_sys::window().ok_or("no window")?;
++    let resp_val = JsFuture::from(window.fetch_with_str(url))
++        .await
++        .map_err(|_| "fetch failed".to_string())?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response")?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    Ok(resp)
++}
++
++async fn response_text(resp: web_sys::Response) -> Result<String, String> {
++    let text = JsFuture::from(resp.text().map_err(|_| "text() unavailable")?)
++        .await
++        .map_err(|_| "body read failed")?;
++    text.as_string().ok_or_else(|| "body is not a string".into())
++}
++
++/// CheckFileInfo + GetFile → `(file name, file text)`, ready for
++/// `FileMsg::WopiOpened`.
++pub async fn load_wopi() -> Result<(String, String), String> {
++    let (src, token) = session_params().ok_or("no WOPI session in URL")?;
++
++    // CheckFileInfo → the real file name (drives the parser choice).
++    let info = fetch_response(&format!("{src}?access_token={token}")).await?;
++    let body = response_text(info).await?;
++    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
++    let name = json["BaseFileName"]
++        .as_str()
++        .unwrap_or("document.snxsch")
++        .to_string();
++
++    // GetFile → the document text.
++    let resp = fetch_response(&format!("{src}/contents?access_token={token}")).await?;
++    let text = response_text(resp).await?;
++
++    Ok((name, text))
++}
++
++/// PutFile: upload the serialised document back to the host.
++pub async fn put_wopi(text: String) -> Result<(), String> {
++    let (src, token) = session_params().ok_or("no WOPI session in URL")?;
++    let window = web_sys::window().ok_or("no window")?;
++
++    let init = web_sys::RequestInit::new();
++    init.set_method("POST");
++    init.set_body(&JsValue::from_str(&text));
++    let request = web_sys::Request::new_with_str_and_init(
++        &format!("{src}/contents?access_token={token}"),
++        &init,
++    )
++    .map_err(|_| "bad request".to_string())?;
++
++    let resp_val = JsFuture::from(window.fetch_with_request(&request))
++        .await
++        .map_err(|_| "save upload failed".to_string())?;
++    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "not a Response")?;
++    if !resp.ok() {
++        return Err(format!("HTTP {}", resp.status()));
++    }
++    Ok(())
++}

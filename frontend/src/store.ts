@@ -35,6 +35,8 @@ interface State {
   officeEntry: VfsEntry | null
   /** OpenCADStudio editor target. */
   cadEntry: VfsEntry | null
+  /** Signex EDA editor target. */
+  edaEntry: VfsEntry | null
   transfers: Record<string, Transfer>
   observerEvents: ObserverEventItem[]
   showTransfers: boolean
@@ -57,6 +59,7 @@ interface State {
   setEditorTarget: (target: { entry: VfsEntry } | { newIn: string } | null) => void
   setOfficeEntry: (entry: VfsEntry | null) => void
   setCadEntry: (entry: VfsEntry | null) => void
+  setEdaEntry: (entry: VfsEntry | null) => void
   toggleTransfers: () => void
   toggleObserver: () => void
   setClipboard: (clipboard: Clipboard | null) => void
@@ -87,6 +90,7 @@ export const useStore = create<State>((set, get) => ({
   editorTarget: null,
   officeEntry: null,
   cadEntry: null,
+  edaEntry: null,
   transfers: {},
   observerEvents: [],
   showTransfers: true,
@@ -167,6 +171,7 @@ export const useStore = create<State>((set, get) => ({
   setEditorTarget: (editorTarget) => set({ editorTarget }),
   setOfficeEntry: (officeEntry) => set({ officeEntry }),
   setCadEntry: (cadEntry) => set({ cadEntry }),
+  setEdaEntry: (edaEntry) => set({ edaEntry }),
   toggleTransfers: () => set((s) => ({ showTransfers: !s.showTransfers })),
   toggleObserver: () => set((s) => ({ showObserver: !s.showObserver })),
   setClipboard: (clipboard) => set({ clipboard }),

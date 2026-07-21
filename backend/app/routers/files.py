@@ -328,6 +328,24 @@ async def cad_session(
     return {"url": f"/OpenCADStudio/?wopi={wopi_src}&access_token={token}"}
 
 
+@router.post("/files/{entry_id}/eda-session")
+async def eda_session(
+    entry_id: int, user: CurrentUser, chats: UserChats, db: DbSession
+) -> dict:
+    """Start a Signex EDA editing session. The web build (our patched fork)
+    reads ?wopi=…&access_token=… from its URL, fetches the file via the same
+    WOPI endpoints Collabora and OpenCADStudio use, and Ctrl+S saves back.
+    Schematics (.snxsch) round-trip; PCBs (.snxpcb) open read-only (the PCB
+    editor has no save path upstream yet)."""
+    entry = await _load_entry(entry_id, db, chats)
+    token = mint_wopi_token(
+        entry.id, user.id, user.username or user.display_name or str(user.telegram_id)
+    )
+    # Browser-side WOPI: same-origin /wopi/... proxied by nginx to the backend.
+    wopi_src = urllib.parse.quote(f"/wopi/files/{entry.id}", safe="")
+    return {"url": f"/Signex/?wopi={wopi_src}&access_token={token}"}
+
+
 class OfficeFileBody(BaseModel):
     chat_id: str
     path: str  # full VFS path including the file name (extension added if missing)
