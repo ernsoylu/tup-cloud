@@ -1,9 +1,40 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index fac212b..6f01e20 100644
+index fac212b..566aab8 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -5212,9 +5212,12 @@ dependencies = [
+@@ -847,6 +847,26 @@ dependencies = [
+  "crossbeam-utils",
+ ]
+ 
++[[package]]
++name = "console_error_panic_hook"
++version = "0.1.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
++dependencies = [
++ "cfg-if",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "console_log"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "86919cef3e37b9356ccf54d4421208c17ecfda01beae61393e7ffd72916c0ef1"
++dependencies = [
++ "log",
++ "web-sys",
++]
++
+ [[package]]
+ name = "const-oid"
+ version = "0.9.6"
+@@ -5210,11 +5230,16 @@ version = "0.14.0"
+ dependencies = [
+  "anyhow",
   "chrono",
++ "console_error_panic_hook",
++ "console_log",
   "dirs",
   "fontdb",
 + "getrandom 0.2.17",
@@ -15,7 +46,7 @@ index fac212b..6f01e20 100644
   "log",
   "num-traits",
   "rfd",
-@@ -5239,6 +5242,9 @@ dependencies = [
+@@ -5239,6 +5264,9 @@ dependencies = [
   "toml 0.8.23",
   "tracing",
   "uuid",
@@ -25,6 +56,38 @@ index fac212b..6f01e20 100644
   "webbrowser",
   "windows-sys 0.61.2",
   "winres",
+@@ -5414,6 +5442,7 @@ dependencies = [
+  "thiserror 2.0.18",
+  "toml 0.8.23",
+  "uuid",
++ "web-time",
+ ]
+ 
+ [[package]]
+@@ -7259,6 +7288,7 @@ dependencies = [
+  "thiserror 2.0.18",
+  "wgpu-core-deps-apple",
+  "wgpu-core-deps-emscripten",
++ "wgpu-core-deps-wasm",
+  "wgpu-core-deps-windows-linux-android",
+  "wgpu-hal",
+  "wgpu-types",
+@@ -7282,6 +7312,15 @@ dependencies = [
+  "wgpu-hal",
+ ]
+ 
++[[package]]
++name = "wgpu-core-deps-wasm"
++version = "27.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9b1027dcf3b027a877e44819df7ceb0e2e98578830f8cd34cd6c3c7c2a7a50b7"
++dependencies = [
++ "wgpu-hal",
++]
++
+ [[package]]
+ name = "wgpu-core-deps-windows-linux-android"
+ version = "27.0.0"
 diff --git a/Cargo.toml b/Cargo.toml
 index f68b43d..453f5d6 100644
 --- a/Cargo.toml
@@ -125,7 +188,7 @@ index 7e9a49c..3eb6509 100644
  tempfile = "3"
  wiremock = "0.6"
 diff --git a/crates/signex-app/src/app/dispatch/library/components_panel.rs b/crates/signex-app/src/app/dispatch/library/components_panel.rs
-index 681ff01..f255149 100644
+index 681ff01..b5969da 100644
 --- a/crates/signex-app/src/app/dispatch/library/components_panel.rs
 +++ b/crates/signex-app/src/app/dispatch/library/components_panel.rs
 @@ -5,6 +5,8 @@
@@ -137,11 +200,26 @@ index 681ff01..f255149 100644
  use super::*;
  
  impl Signex {
+@@ -29,6 +31,14 @@ impl Signex {
+         &mut self,
+         source: crate::library::state::ComponentsMountSource,
+     ) -> Task<Message> {
++        // Web: there is no folder picker and no local library storage —
++        // say so in the Messages panel instead of a silent no-op.
++        if cfg!(target_arch = "wasm32") {
++            log::warn!(
++                "[web] Libraries need a local *.snxlib/ folder and are not available in the web build"
++            );
++            return Task::none();
++        }
+         // Open `*.snxlib` directory picker — landing message is
+         // `ComponentsPanelAddLibraryAt` so the dispatcher knows
+         // which source bucket the result belongs to.
 diff --git a/crates/signex-app/src/app/dispatch/library/lifecycle.rs b/crates/signex-app/src/app/dispatch/library/lifecycle.rs
-index 5996e5d..657a881 100644
+index 5996e5d..b6dd454 100644
 --- a/crates/signex-app/src/app/dispatch/library/lifecycle.rs
 +++ b/crates/signex-app/src/app/dispatch/library/lifecycle.rs
-@@ -5,6 +5,8 @@
+@@ -5,12 +5,22 @@
  //! Extracted verbatim from the library dispatcher (`dispatch/library`);
  //! pure code motion, zero behaviour change.
  
@@ -150,6 +228,20 @@ index 5996e5d..657a881 100644
  use super::*;
  
  impl Signex {
+     /// File ▸ Library ▸ Open Library… — runs `rfd::AsyncFileDialog` on
+     /// the directory level and lands in [`LibraryMessage::OpenLibraryAt`].
+     pub(super) fn handle_open_library_dialog(&mut self) -> Task<Message> {
++        // Web: there is no folder picker and no local library storage —
++        // say so in the Messages panel instead of a silent no-op.
++        if cfg!(target_arch = "wasm32") {
++            log::warn!(
++                "[web] Libraries need a local *.snxlib/ folder and are not available in the web build"
++            );
++            return Task::none();
++        }
+         Task::perform(
+             async {
+                 rfd::AsyncFileDialog::new()
 diff --git a/crates/signex-app/src/app/dispatch/library/primitive_picker.rs b/crates/signex-app/src/app/dispatch/library/primitive_picker.rs
 index b389bb5..cb9689e 100644
 --- a/crates/signex-app/src/app/dispatch/library/primitive_picker.rs
@@ -497,6 +589,23 @@ index acc746e..f516d88 100644
      /// Grid-snapped world position of the last `PlacePolygon`
      /// left-click, paired with `polygon_last_click_time` for the
      /// double-click check — the second click must land on the exact
+diff --git a/crates/signex-app/src/library/panel.rs b/crates/signex-app/src/library/panel.rs
+index 16c404e..7a54368 100644
+--- a/crates/signex-app/src/library/panel.rs
++++ b/crates/signex-app/src/library/panel.rs
+@@ -58,7 +58,11 @@ pub fn view<'a>(state: &'a LibraryState, tokens: &'a ThemeTokens) -> Element<'a,
+     if state.open_libraries.is_empty() {
+         col = col.push(
+             container(
+-                text("No libraries open. Use File ▸ Library ▸ Open Library… to open a *.snxlib/.")
++                text(if cfg!(target_arch = "wasm32") {
++                    "Component libraries are not available in the web build — they need a local *.snxlib/ folder (and git). Use the desktop Signex for library work."
++                } else {
++                    "No libraries open. Use File ▸ Library ▸ Open Library… to open a *.snxlib/."
++                })
+                     .size(LIB_PANEL_TEXT_SIZE)
+                     .color(muted),
+             )
 diff --git a/crates/signex-app/src/library/settings/mod.rs b/crates/signex-app/src/library/settings/mod.rs
 index dcb546f..d31be6e 100644
 --- a/crates/signex-app/src/library/settings/mod.rs
