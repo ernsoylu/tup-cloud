@@ -92,11 +92,21 @@ export async function createCadFile(): Promise<void> {
   }
 }
 
+/** v4 uuid from getRandomValues — crypto.randomUUID needs a secure context,
+ * and the stack is commonly reached over plain LAN http. */
+function uuidv4(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 // Blank Signex schematic — the exact serialisation Signex v0.14 produces for
 // an empty A4 sheet (TOML envelope + TSV bulk blocks), with a fresh uuid per
 // file. Plain text, so it flows through the same save pipeline as markdown.
 const blankSnxsch = () => `format = "snxsch/1"
-schematic_id = "${crypto.randomUUID()}"
+schematic_id = "${uuidv4()}"
 version = 1
 generator = "signex"
 generator_version = "0.14.0"
