@@ -100,10 +100,6 @@ export const api = {
     request<FileVersionItem[]>(`/api/files/${entryId}/versions`),
   wopiSession: (entryId: number) =>
     request<{ url: string }>(`/api/files/${entryId}/wopi-session`, { method: 'POST' }),
-  cadSession: (entryId: number) =>
-    request<{ url: string }>(`/api/files/${entryId}/cad-session`, { method: 'POST' }),
-  edaSession: (entryId: number) =>
-    request<{ url: string }>(`/api/files/${entryId}/eda-session`, { method: 'POST' }),
   newOfficeFile: (chatId: string, path: string, docType: string) =>
     request<{ ok: boolean; id: number; file_name: string }>(
       '/api/files/office',

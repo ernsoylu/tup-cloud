@@ -16,7 +16,7 @@ import {
 import { MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
 import { api, downloadUrl, exportUrl, thumbUrl } from '../api'
 import { confirmModal } from '../dialogs'
-import { FileIcon, isCad, isEda, isOffice, KindIcon, kindLabel } from '../media'
+import { FileIcon, isOffice, KindIcon, kindLabel } from '../media'
 import {
   collectDropped,
   copySelection,
@@ -414,11 +414,7 @@ function ContextMenu({
   } else if (row) {
     if (row.kind === 'file' && row.entry) {
       const entry = row.entry
-      if (isCad(entry.file_name)) {
-        add('Open in CAD studio', () => useStore.getState().setCadEntry(entry))
-      } else if (isEda(entry.file_name)) {
-        add('Open in Signex', () => useStore.getState().setEdaEntry(entry))
-      } else if (isOffice(entry.file_name)) {
+      if (isOffice(entry.file_name)) {
         add('Edit document', () => useStore.getState().setOfficeEntry(entry))
         add('Export as PDF', () => window.open(exportUrl(entry.id, 'pdf'), '_blank'))
       } else {

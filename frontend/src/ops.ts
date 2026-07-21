@@ -2,7 +2,7 @@
 
 import { api } from './api'
 import { confirmModal, promptModal } from './dialogs'
-import { isCad, isEda, isOffice } from './media'
+import { isOffice } from './media'
 import { buildRows, dirOf, inTrash, KEEP_FILE, Row, TRASH_DIR, useStore } from './store'
 
 export function rowPath(row: Row): string {
@@ -17,10 +17,6 @@ export function isMarkdown(name: string): boolean {
 export function openRow(row: Row): void {
   const store = useStore.getState()
   if (row.kind === 'folder') store.setDir(rowPath(row))
-  else if (row.entry && isCad(row.entry.file_name) && !inTrash(store.currentDir))
-    store.setCadEntry(row.entry)
-  else if (row.entry && isEda(row.entry.file_name) && !inTrash(store.currentDir))
-    store.setEdaEntry(row.entry)
   else if (row.entry && isOffice(row.entry.file_name) && !inTrash(store.currentDir))
     store.setOfficeEntry(row.entry) // Collabora is both viewer and editor
   else if (row.entry) store.setPreview(row.entry) // preview by default, edit via context menu
@@ -54,105 +50,6 @@ export async function createOfficeFile(
     await store.refreshIndex(true)
     const entry = useStore.getState().entries.find((e) => e.id === result.id)
     if (entry) store.setOfficeEntry(entry)
-  } catch (error) {
-    store.toast('error', (error as Error).message)
-  }
-}
-
-// Minimal R12 DXF (header + empty tables/blocks/entities) — plain text, so it
-// goes through the same save pipeline as markdown and parses in any CAD app.
-const BLANK_DXF = [
-  '0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '0', 'ENDSEC',
-  '0', 'SECTION', '2', 'TABLES', '0', 'ENDSEC',
-  '0', 'SECTION', '2', 'BLOCKS', '0', 'ENDSEC',
-  '0', 'SECTION', '2', 'ENTITIES', '0', 'ENDSEC',
-  '0', 'EOF', '',
-].join('\n')
-
-/** Create a blank .dxf (auto-named like office files) and open it in OpenCADStudio. */
-export async function createCadFile(): Promise<void> {
-  const store = useStore.getState()
-  const chatId = store.currentDrive
-  if (!chatId) return
-  const dir = dirOf(store.currentDir)
-  const taken = new Set(
-    store.entries
-      .filter((e) => e.virtual_path === dir)
-      .map((e) => e.file_name.toLowerCase()),
-  )
-  let name = 'New CAD Drawing.dxf'
-  for (let n = 1; taken.has(name.toLowerCase()) && n < 1000; n++) name = `New CAD Drawing_${n}.dxf`
-  try {
-    const result = await api.saveText(chatId, `${dir}${name}`, BLANK_DXF)
-    await store.refreshIndex(true)
-    const entry = useStore.getState().entries.find((e) => e.id === result.id)
-    if (entry) store.setCadEntry(entry)
-  } catch (error) {
-    store.toast('error', (error as Error).message)
-  }
-}
-
-/** v4 uuid from getRandomValues — crypto.randomUUID needs a secure context,
- * and the stack is commonly reached over plain LAN http. */
-function uuidv4(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-// Blank Signex schematic — the exact serialisation Signex v0.14 produces for
-// an empty A4 sheet (TOML envelope + TSV bulk blocks), with a fresh uuid per
-// file. Plain text, so it flows through the same save pipeline as markdown.
-const blankSnxsch = () => `format = "snxsch/1"
-schematic_id = "${uuidv4()}"
-version = 1
-generator = "signex"
-generator_version = "0.14.0"
-paper_size = "A4"
-root_sheet_page = "1"
-
-
-[sheets.components]
-content = """
-uuid  ref  library  pos_x  pos_y  rotation  value  mpn
-"""
-
-[sheets.wires]
-content = """
-uuid  net  start_x  start_y  end_x  end_y  stroke_width
-"""
-
-[sheets.junctions]
-content = """
-uuid  pos_x  pos_y  diameter
-"""
-
-[sheets.labels]
-content = """
-uuid  text  pos_x  pos_y  rotation  kind  shape  font_size  justify  justify_v
-"""
-`
-
-/** Create a blank .snxsch (auto-named like office files) and open it in Signex. */
-export async function createEdaFile(): Promise<void> {
-  const store = useStore.getState()
-  const chatId = store.currentDrive
-  if (!chatId) return
-  const dir = dirOf(store.currentDir)
-  const taken = new Set(
-    store.entries
-      .filter((e) => e.virtual_path === dir)
-      .map((e) => e.file_name.toLowerCase()),
-  )
-  let name = 'New Schematic.snxsch'
-  for (let n = 1; taken.has(name.toLowerCase()) && n < 1000; n++) name = `New Schematic_${n}.snxsch`
-  try {
-    const result = await api.saveText(chatId, `${dir}${name}`, blankSnxsch())
-    await store.refreshIndex(true)
-    const entry = useStore.getState().entries.find((e) => e.id === result.id)
-    if (entry) store.setEdaEntry(entry)
   } catch (error) {
     store.toast('error', (error as Error).message)
   }

@@ -62,19 +62,13 @@ const EXT_MIME: Record<string, string> = {
   igs: 'model/iges',
 }
 
-const CAD_EXTS = new Set(['dwg', 'dxf', 'step', 'stp', 'stl', 'obj', 'iges', 'igs'])
+/** CAD/EDA formats keep their icon + kind label; there is no embedded
+ * editor for them — they preview/download like any other file. */
+const CAD_EXTS = new Set([
+  'dwg', 'dxf', 'step', 'stp', 'stl', 'obj', 'iges', 'igs',
+  'snxsch', 'snxpcb', 'snxprj', 'snxsym', 'snxfpt', 'snxlib',
+])
 
-/** Files opened in the embedded Signex EDA. Only the single-file formats the
- * web build can WOPI-open: schematics round-trip, PCBs open read-only.
- * Projects / symbols / footprints (.snxprj/.snxsym/.snxfpt) stay downloads. */
-const EDA_EXTS = new Set(['snxsch', 'snxpcb'])
-
-export function isEda(name: string): boolean {
-  const ext = name.split('.').pop()?.toLowerCase() ?? ''
-  return EDA_EXTS.has(ext)
-}
-
-/** Files opened in the embedded OpenCADStudio. */
 export function isCad(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   return CAD_EXTS.has(ext)
@@ -118,7 +112,7 @@ export function kindFromMime(mime: string): IconKind {
 /** Icon kind for a file: trust indexed media kind when it names real media,
  * otherwise infer from the extension so untyped files still look right. */
 export function iconKindFor(fileName: string, mediaKind: string): IconKind {
-  if (isCad(fileName) || isEda(fileName)) return 'cad'
+  if (isCad(fileName)) return 'cad'
   if (mediaKind === 'photo' || mediaKind === 'video' || mediaKind === 'audio') return mediaKind
   return kindFromMime(mimeFromName(fileName))
 }

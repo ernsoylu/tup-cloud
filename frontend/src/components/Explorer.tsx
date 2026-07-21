@@ -16,8 +16,6 @@ import {
   Tooltip,
 } from '@mantine/core'
 import {
-  Icon3dCubeSphere,
-  IconCircuitResistor,
   IconArrowUp,
   IconCloud,
   IconEye,
@@ -42,12 +40,10 @@ import { Menu } from '@mantine/core'
 import { api } from '../api'
 import { confirmModal } from '../dialogs'
 import { useShortcuts } from '../hooks/useShortcuts'
-import { createCadFile, createEdaFile, createOfficeFile, newFolder } from '../ops'
+import { createOfficeFile, newFolder } from '../ops'
 import { formatBytes, formatWhen, parentDir, useStore } from '../store'
 import type { AdminUserRow, BackupConfig, BackupItem } from '../types'
 import Breadcrumbs from './Breadcrumbs'
-import CadEditor from './CadEditor'
-import EdaEditor from './EdaEditor'
 import FileList from './FileList'
 import MarkdownEditor from './MarkdownEditor'
 import ObserverFeed from './ObserverFeed'
@@ -206,18 +202,6 @@ export default function Explorer() {
               >
                 New drawing (.odg)
               </Menu.Item>
-              <Menu.Item
-                leftSection={<Icon3dCubeSphere size={15} />}
-                onClick={() => void createCadFile()}
-              >
-                New CAD drawing (.dxf)
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<IconCircuitResistor size={15} />}
-                onClick={() => void createEdaFile()}
-              >
-                New schematic (.snxsch)
-              </Menu.Item>
             </Menu.Dropdown>
           </Menu>
           <Button size="xs" leftSection={<IconUpload size={14} />} onClick={openUploadPicker}>
@@ -303,8 +287,6 @@ export default function Explorer() {
       <Preview />
       <MarkdownEditor />
       <OfficeEditor />
-      <CadEditor />
-      <EdaEditor />
       {showAdmin && <AdminPanel close={() => setShowAdmin(false)} />}
     </AppShell>
   )

@@ -62,25 +62,6 @@ services:
       - MKNOD
     restart: unless-stopped
 
-  opencad:
-    # Prebuilt image: the wasm build is heavy (iced + wgpu + CAD parser), so it
-    # is compiled on a beefier host via ./opencad/Dockerfile and loaded here as
-    # `opencad-wopi`. To rebuild it, run `docker build -t opencad-wopi ./opencad`
-    # on a machine with adequate RAM. `pull_policy: never` keeps compose from
-    # trying to fetch it from a registry.
-    image: opencad-wopi
-    pull_policy: never
-    restart: unless-stopped
-
-  signex:
-    # Prebuilt image, same model as opencad: the wasm build (iced + wgpu +
-    # 17-crate EDA workspace) is compiled on a beefier host via
-    # ./signex/Dockerfile and loaded here as `signex-wopi`. To rebuild:
-    # `docker build -t signex-wopi ./signex` on a machine with adequate RAM.
-    image: signex-wopi
-    pull_policy: never
-    restart: unless-stopped
-
   frontend:
     build: ./frontend
     ports:
@@ -88,8 +69,6 @@ services:
     depends_on:
       - backend
       - collabora
-      - opencad
-      - signex
 
 volumes:
   pgdata:
